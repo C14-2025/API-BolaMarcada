@@ -8,9 +8,7 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
 )
-from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
+from database import Base
 
 
 # Tabela Usuários
@@ -45,11 +43,11 @@ class SportsCenter(Base):
 
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
-    user_id = Column("user_id", Integer, ForeignKey("users.id"), nullable=False)
+    # user_id = Column("user_id", Integer, ForeignKey("users.id"), nullable=False)
 
     # Campos
     name = Column("name", String, nullable=False)
-    cnpj = Column("cnpj", String, nullable=False)
+    cnpj = Column("cnpj", String, unique=True, nullable=False)
     latitude = Column("latitude", Numeric(9, 6), nullable=False)
     longitude = Column("longitude", Numeric(9, 6), nullable=False)
     photo_path = Column("photo_path", String)
@@ -57,7 +55,7 @@ class SportsCenter(Base):
 
     def __init__(
         self,
-        user_id,
+        # user_id,
         name,
         cnpj,
         latitude,
@@ -65,7 +63,7 @@ class SportsCenter(Base):
         photo_path=None,
         description=None,
     ):
-        self.user_id = user_id
+        # self.user_id = user_id
         self.name = name
         self.cnpj = cnpj
         self.latitude = latitude
@@ -172,3 +170,18 @@ class Booking(Base):
         self.day_of_week = day_of_week
         self.start_time = start_time
         self.status = status
+
+
+# alembic init alembic
+# alterar env.py
+# alterar alembic.ini
+# alembic revision --autogenerate -m "Initial Migration"
+# alembic upgrade head
+
+# se deu erro
+# deletar version e .db
+# executa novamente alembic revision --autogenerate -m "Initial Migration"
+
+# sempre quando houver alteraçao do banco, é necessario migrar:
+# alembic revision --autogenerate -m "remove admin"
+# alembic upgrade head
