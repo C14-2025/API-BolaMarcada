@@ -8,40 +8,54 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
 )
-from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
-from core.database import Base  # importa a Base do database.py para garantir que todos os models usem a mesma Base
+from core.database import Base
+from sqlalchemy.types import CHAR, TypeDecorator
 
 
 # Tabela Usuários
+class GUID(TypeDecorator):
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(UUID(as_uuid=True))
+        return dialect.type_descriptor(CHAR(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+        return str(value if isinstance(value, uuid.UUID) else uuid.UUID(str(value)))
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+
+
 class User(Base):
     __tablename__ = "users"
 
     # Keys
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, unique=True, nullable=False)
+    id = Column(
+        GUID(), primary_key=True, default=uuid.uuid4, unique=True, nullable=False
+    )
 
     # Campos
-    name = Column("name", String, nullable=False)
-    email = Column("email", String, nullable=False, unique=True)
-    hashed_password = Column("hashed_password", String, nullable=False)
-    cpf = Column("cpf", String, nullable=False)
-    phone = Column("phone", String)
-    is_active = Column("active", Boolean, default=True)
-    is_admin = Column("admin", Boolean, default=False)
-    avatar = Column("avatar", String, nullable=False, default="default_avatar.png")
-    created_at = Column("created_at", DateTime(timezone=True), server_default=func.now())
-
-    def __init__(self, name, email, hashed_password, cpf, phone, is_active=True, is_admin=False, avatar=None,):
-        self.name = name
-        self.email = email
-        self.hashed_password = hashed_password
-        self.cpf = cpf
-        self.phone = phone
-        self.is_active = is_active
-        self.is_admin = is_admin
-        self.avatar = avatar
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=False, unique=True, index=True)
+    hashed_password = Column(String, nullable=False)
+    cpf = Column(String, nullable=False, unique=True, index=True)
+    phone = Column(String)
+    is_active = Column("active", Boolean, default=True, nullable=False)
+    is_admin = Column("admin", Boolean, default=False, nullable=False)
+    avatar = Column(String, nullable=False, default="default_avatar.png")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 # Tabela de Espaço Esportivo
@@ -60,7 +74,16 @@ class SportsCenter(Base):
     photo_path = Column("photo_path", String)
     description = Column("description", String)
 
-    def __init__(self, user_id, name, cnpj, latitude, longitude, photo_path=None, description=None):
+    def __init__(
+        self,
+        user_id,
+        name,
+        cnpj,
+        latitude,
+        longitude,
+        photo_path=None,
+        description=None,
+    ):
         self.user_id = user_id
         self.name = name
         self.cnpj = cnpj
@@ -79,11 +102,10 @@ class Review(Base):
     field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
-    #Campos
+    # Campos
     rating = Column("rating", Integer, nullable=False)
     comment = Column("comment", String)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
 
     def __init__(self, field_id, user_id, rating, comment=None):
         self.field_id = field_id
@@ -98,7 +120,9 @@ class Field(Base):
 
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
-    sports_center_id = Column("sports_center_id", Integer, ForeignKey("sports_centers.id"), nullable=False)
+    sports_center_id = Column(
+        "sports_center_id", Integer, ForeignKey("sports_centers.id"), nullable=False
+    )
 
     # Campos
     name = Column("name", String, nullable=False)
@@ -107,7 +131,15 @@ class Field(Base):
     photo_path = Column("photo_path", String)
     description = Column("description", Text)
 
-    def __init__(self, sports_center_id, name, field_type, price_per_hour, photo_path=None, description=None):
+    def __init__(
+        self,
+        sports_center_id,
+        name,
+        field_type,
+        price_per_hour,
+        photo_path=None,
+        description=None,
+    ):
         self.sports_center_id = sports_center_id
         self.name = name
         self.field_type = field_type
@@ -125,7 +157,9 @@ class Availability(Base):
     field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
 
     # Campos
-    day_of_week = Column("day_of_week", Integer, nullable=False) # 0 = domingo, 1 = segunda, ...
+    day_of_week = Column(
+        "day_of_week", Integer, nullable=False
+    )  # 0 = domingo, 1 = segunda, ...
     start_time = Column("start_time", DateTime, nullable=False)
     end_time = Column("end_time", DateTime, nullable=False)
 
@@ -144,7 +178,7 @@ class Booking(Base):
     id = Column("id", Integer, primary_key=True, autoincrement=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
-    
+
     # Campos
     day_of_week = Column("day_of_week", Integer, nullable=False)
     start_time = Column("start_time", DateTime, nullable=False)
