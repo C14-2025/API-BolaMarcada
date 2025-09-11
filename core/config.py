@@ -1,4 +1,3 @@
-# app/core/config.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from typing import Optional
@@ -20,7 +19,6 @@ class Settings(BaseSettings):
     )
     ALGORITHM: str = "HS256"
 
-    # substitui class Config
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def assemble_db_connection(self) -> str:
