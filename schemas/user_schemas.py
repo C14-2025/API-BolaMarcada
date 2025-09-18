@@ -46,3 +46,7 @@ class UserUpdateMe(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     avatar: Optional[str] = None  
+
+
+class UserPublic(UserBase):
+    id: uuid.UUID
