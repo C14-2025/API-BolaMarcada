@@ -1,10 +1,13 @@
 import uuid
-import pytest
 from unittest.mock import MagicMock, patch
 from schemas.user_schemas import UserSignUp, UserSignIn
 from utils.security import get_password_hash, decode_access_token  
 from models.models import User
+from tests.tests_utils import make_client
 
+
+ROUTES_MODULE = "routes.user_routes"
+API_PREFIX = "/api/v1"
 
 
 # Teste 1: create_user hash password
@@ -78,10 +81,12 @@ def test_create_and_decode_access_token():
 
 
 
-# Teste 4: rota /signin
-def test_signin_route_integration(client, db_session):
-    raw_password = "SenhaRoute123!"
+# Teste 4: rota /token integração
+def test_token_route_integration(client, db_session):
+    from models.models import User
+    from utils.security import get_password_hash, decode_access_token
 
+    raw_password = "SenhaRoute123!"
     user = User(
         id=uuid.uuid4(),
         name="Route User",
@@ -96,18 +101,67 @@ def test_signin_route_integration(client, db_session):
     db_session.add(user)
     db_session.commit()
 
-    payload = {"email": user.email, "password": raw_password}
-    resp = client.post("/users/signin", json=payload)
+    
+    resp = client.post(
+        "/api/v1/users/token",
+        data={"username": user.email, "password": raw_password},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
     assert resp.status_code == 200, resp.text
-
     data = resp.json()
-    assert "access_token" in data
     assert data.get("token_type") == "bearer"
+    assert "access_token" in data
+    decoded = decode_access_token(data["access_token"])
+    assert decoded == str(user.id) or decoded.get("sub") == str(user.id)
+
+
+
+def test_update_me_route_success():
+    client = make_client()
+
+
+    with patch("routes.user_routes.update_user_me") as mock_update:
+        fake_id = uuid.uuid4()
+        mock_update.return_value = {
+            "id": str(fake_id),
+            "name": "Jane Doe",
+            "email": "jane@example.com",
+            "phone": "+5511999999999",
+            "avatar": "https://cdn.example.com/avatar.png",
+            "is_active": True,
+            "cpf": "12345678901",
+        }
+
+        payload = {
+            "name": "Jane Doe",
+            "email": "jane@example.com",
+            "phone": "+5511999999999",
+            "avatar": "https://cdn.example.com/avatar.png",
+        }
+
+        r = client.patch(f"{API_PREFIX}/users/me", json=payload)
+        assert r.status_code == 200, r.text
+
+        data = r.json()
+        assert data["id"] == str(fake_id)
+        assert data["name"] == "Jane Doe"
+        assert data["email"] == "jane@example.com"
+
+       
+        args, _ = mock_update.call_args
+        assert len(args) == 3
+        assert getattr(args[1], "email", None) == "auth@example.com"
+
+
+def test_delete_me_route_soft_default_204():
+    client = make_client()
 
    
-    try:
-        decoded = decode_access_token(data["access_token"])
-       
-        assert decoded.get("sub") == str(user.id)
-    except Exception:
-        assert isinstance(data["access_token"], str) and len(data["access_token"]) > 20
+    with patch("routes.user_routes.deactivate_user_me") as mock_soft, \
+         patch("routes.user_routes.hard_delete_user_me") as mock_hard:
+
+        r = client.delete(f"{API_PREFIX}/users/me") 
+        assert r.status_code == 204, r.text
+
+        mock_soft.assert_called_once()
+        mock_hard.assert_not_called()
