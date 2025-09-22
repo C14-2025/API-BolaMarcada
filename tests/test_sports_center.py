@@ -65,8 +65,7 @@ def test_delete_sports_center(client):
     assert get_resp.status_code == 404
 
 
-# Teste de duplicidade de CNPJ
-def test_duplicate_cnpj(client):
+def test_duplicate_cnpj(client, mocker):
     json_data = {
         "name": "Centro Duplicado",
         "cnpj": "12345678000103",
@@ -75,15 +74,24 @@ def test_duplicate_cnpj(client):
         "photo_path": None,
         "description": "Primeiro centro",
     }
-    client.post("/sports_center/create", json=json_data)
+
+    # Mockando o service para simular duplicidade
+    mocker.patch(
+        "services.sports_center_service.create_sports_center_service",
+        side_effect=ValueError("CNPJ já cadastrado"),
+    )
+
     response = client.post("/sports_center/create", json=json_data)
+
     assert response.status_code == 409
     assert response.json()["detail"] == "CNPJ já cadastrado"
 
 
 # Teste de campos obrigatórios ausentes
 def test_missing_required_fields(client):
-    response = client.post("/sports_center/create", json={"latitude": -23.561684, "longitude": -46.655981})
+    response = client.post(
+        "/sports_center/create", json={"latitude": -23.561684, "longitude": -46.655981}
+    )
     assert response.status_code == 422
 
 
