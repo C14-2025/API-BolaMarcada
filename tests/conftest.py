@@ -1,38 +1,55 @@
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from database import Base, get_db
-from main import app
-from fastapi.testclient import TestClient
-import models
+from sqlalchemy.pool import StaticPool
+
+from core.database import Base, get_db
+from main import app 
 
 
-TEST_SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
-engine = create_engine(TEST_SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}, echo=True)
+
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Cria todas as tabelas antes de rodar os testes
-Base.metadata.create_all(bind=engine)
+
+@pytest.fixture(scope="session", autouse=True)
+def create_test_db():
+    """Cria todas as tabelas no início da sessão de testes"""
+    Base.metadata.create_all(bind=engine)
+    yield
+    Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture(scope="function")
-def test_db_session():
-    session = TestingSessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+def db_session():
+    """Cria uma nova sessão para cada teste"""
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = TestingSessionLocal(bind=connection)
+
+    yield session
+
+    session.close()
+    transaction.rollback()
+    connection.close()
 
 
 @pytest.fixture(scope="function")
-def client(test_db_session):
+def client(db_session):
     def override_get_db():
         try:
-            yield test_db_session
+            yield db_session
         finally:
-            pass
+            db_session.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
+    import routes
+    routes.user_router.get_db = override_get_db 
+    return TestClient(app)
