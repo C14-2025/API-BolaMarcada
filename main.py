@@ -1,13 +1,17 @@
 try:
     import bcrypt
+
     if not hasattr(bcrypt, "__about__"):
+
         class _About:
             __version__ = getattr(bcrypt, "__version__", "4")
+
         bcrypt.__about__ = _About()
 except Exception:
     pass
 
 import logging
+
 logging.getLogger("passlib").setLevel(logging.ERROR)
 
 from fastapi import FastAPI
@@ -38,11 +42,11 @@ API_PREFIX = settings.API_V1_STR  # "/api/v1"
 
 # Monte TODOS os routers com o prefixo
 app.include_router(availability_router, prefix=API_PREFIX)
-app.include_router(booking_router,       prefix=API_PREFIX)
-app.include_router(field_router,         prefix=API_PREFIX)
-app.include_router(review_router,        prefix=API_PREFIX)
+app.include_router(booking_router, prefix=API_PREFIX)
+app.include_router(field_router, prefix=API_PREFIX)
+app.include_router(review_router, prefix=API_PREFIX)
 app.include_router(sports_center_router, prefix=API_PREFIX)
-app.include_router(user_router,          prefix=API_PREFIX)
+app.include_router(user_router, prefix=API_PREFIX)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

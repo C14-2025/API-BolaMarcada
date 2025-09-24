@@ -3,7 +3,7 @@ from typing import Optional
 
 
 class SportsCenterCreate(BaseModel):
-    # user_id: int
+    user_id: int
     name: str
     cnpj: str
     latitude: float

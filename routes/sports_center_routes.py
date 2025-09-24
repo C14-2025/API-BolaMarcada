@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from schemas.sports_center_schemas import SportsCenterCreate, SportsCenterResponse
 from sqlalchemy.orm import Session
-from database import get_db
+from core.database import get_db
 from fastapi import Depends
 from services.sports_center_service import (
     create_sports_center_service,

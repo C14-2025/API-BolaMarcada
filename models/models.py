@@ -76,7 +76,7 @@ class SportsCenter(Base):
 
     def __init__(
         self,
-        # user_id,
+        user_id,
         name,
         cnpj,
         latitude,
@@ -84,7 +84,7 @@ class SportsCenter(Base):
         photo_path=None,
         description=None,
     ):
-        # self.user_id = user_id
+        self.user_id = user_id
         self.name = name
         self.cnpj = cnpj
         self.latitude = latitude
