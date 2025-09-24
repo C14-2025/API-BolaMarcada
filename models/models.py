@@ -8,35 +8,54 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
 )
-from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
+from sqlalchemy.sql import func
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
+from core.database import Base
+from sqlalchemy.types import CHAR, TypeDecorator
 
 
 # Tabela Usuários
+class GUID(TypeDecorator):
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(UUID(as_uuid=True))
+        return dialect.type_descriptor(CHAR(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+        return str(value if isinstance(value, uuid.UUID) else uuid.UUID(str(value)))
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+
+
 class User(Base):
     __tablename__ = "users"
 
     # Keys
-    id = Column("id", Integer, primary_key=True, autoincrement=True)
+    id = Column(
+        GUID(), primary_key=True, default=uuid.uuid4, unique=True, nullable=False
+    )
 
     # Campos
-    name = Column("name", String, nullable=False)
-    email = Column("email", String, nullable=False, unique=True)
-    password = Column("password", String, nullable=False)
-    cpf = Column("cpf", String, nullable=False)
-    phone = Column("phone", String)
-    active = Column("active", Boolean, default=True)
-    admin = Column("admin", Boolean, default=False)
-
-    def __init__(self, name, email, password, cpf, phone, active=True, admin=False):
-        self.name = name
-        self.email = email
-        self.password = password
-        self.cpf = cpf
-        self.phone = phone
-        self.active = active
-        self.admin = admin
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=False, unique=True, index=True)
+    hashed_password = Column(String, nullable=False)
+    cpf = Column(String, nullable=False, unique=True, index=True)
+    phone = Column(String)
+    is_active = Column("active", Boolean, default=True, nullable=False)
+    is_admin = Column("admin", Boolean, default=False, nullable=False)
+    avatar = Column(String, nullable=False, default="default_avatar.png")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 # Tabela de Espaço Esportivo
@@ -45,7 +64,7 @@ class SportsCenter(Base):
 
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
-    user_id = Column("user_id", Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # Campos
     name = Column("name", String, nullable=False)
@@ -81,19 +100,18 @@ class Review(Base):
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
     field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
-    user_id = Column("user_id", Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # Campos
     rating = Column("rating", Integer, nullable=False)
     comment = Column("comment", String)
-    created_at = Column("created_at", DateTime)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    def __init__(self, field_id, user_id, rating, comment=None, created_at=None):
+    def __init__(self, field_id, user_id, rating, comment=None):
         self.field_id = field_id
         self.user_id = user_id
         self.rating = rating
         self.comment = comment
-        self.created_at = created_at
 
 
 # Tabela de campos
@@ -158,7 +176,7 @@ class Booking(Base):
 
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
-    user_id = Column("user_id", Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
 
     # Campos
