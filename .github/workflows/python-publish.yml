@@ -69,3 +69,17 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  notification:
+    runs-on: ubuntu-latest
+    needs:
+      - release-build
+      - pypi-publish
+      - test
+
+    steps:
+      - name: Install mailutils
+        run: sudo apt-get install mailutils
+
+      - name: Send email notification
+        run: echo "Pipeline realizado com sucesso" | mail -s "Pipeline Notification" thomasvictor2909@gmail.com
