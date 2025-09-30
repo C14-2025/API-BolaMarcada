@@ -124,6 +124,11 @@ class Field(Base):
         "sports_center_id", Integer, ForeignKey("sports_centers.id"), nullable=False
     )
 
+    # user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    # id = Column(
+    #     GUID(), ForeignKey("users.id"), default=uuid.uuid4, unique=True, nullable=False
+    # )
+
     # Campos
     name = Column("name", String, nullable=False)
     field_type = Column("type", String, nullable=False)
