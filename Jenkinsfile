@@ -1,183 +1,119 @@
-// Jenkinsfile (Scripted) — docker-compose tests + robust docker cp + build + notify (Mailtrap)
-node {
-  // ajuste se necessário
-  def WIN_PY = 'C:\\\\Users\\\\jmxd\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'
-  def SMTP_HOST = 'sandbox.smtp.mailtrap.io'
-  def SMTP_PORT = '2525'
-  def buildStatus = 'SUCCESS'
+pipeline {
+  agent any
 
-  try {
+  options {
+    timestamps()
+    ansiColor('xterm')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    timeout(time: 45, unit: 'MINUTES')
+  }
+
+  environment {
+    DOCKER_BUILDKIT = '1'
+    IMAGE_NAME = 'ci-api'                     // nome lógico local da imagem
+    IMAGE_TAG  = ''                           // setado no Checkout
+    SMTP_HOST  = 'smtp.mailtrap.io'
+    SMTP_PORT  = '2525'
+    // Isola nomes do compose por build
+    COMPOSE_PROJECT_NAME = "ci_${env.JOB_NAME}_${env.BUILD_NUMBER}".replaceAll('[^a-zA-Z0-9]', '').toLowerCase()
+  }
+
+  stages {
     stage('Checkout') {
-      checkout scm
-      echo "Checkout realizado."
-    }
-
-    stage('Prepare workspace') {
-      // garante diretório reports no workspace
-      if (isUnix()) {
-        sh 'mkdir -p reports logs || true'
-      } else {
-        bat 'if not exist reports mkdir reports'
-        bat 'if not exist logs mkdir logs'
+      steps {
+        // Se o job já usa "SCM: Git", mantenha 'checkout scm'.
+        // Se preferir forçar PAT: descomente a linha abaixo e ajuste a URL:
+        // git credentialsId: 'github-pat', url: 'https://github.com/ORG/REPO.git', branch: 'main'
+        checkout scm
+        script {
+          def short = sh(script: 'git rev-parse --short HEAD || echo local', returnStdout: true).trim()
+          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${short}"
+        }
       }
     }
 
-    stage('Tests (docker-compose + reliable docker cp)') {
-      echo "Usando secret file (.env) e docker-compose para rodar migrations + testes (copy fallback)..."
-      withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
-        if (isUnix()) {
+    stage('Preparar .env') {
+      steps {
+        withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
           sh '''
             set -e
-            cp "$ENV_FILE" .env
-            mkdir -p reports logs
-
-            # cleanup gentle
-            docker rm -f jenkins_api_test 2>/dev/null || true
-            docker-compose down --remove-orphans || true
-            docker-compose pull || true
-
-            # sobe apenas DB
-            docker-compose up -d db
-            echo "esperando DB inicializar..."
-            sleep 8
-
-            # build imagem (opcional); nome consistente
-            docker build -t api-bolamarcada:jenkins . > logs/build_image.log 2>&1 || true
-
-            # roda testes via docker-compose RUN mas sem --rm para podermos copiar artefatos
-            docker-compose run --no-deps --name jenkins_api_test api sh -c "python -m pytest -q --junitxml=/app/reports/junit.xml" || true
-
-            # traz o relatório do container para o host workspace
-            echo "tentando docker cp jenkins_api_test:/app/reports -> ./reports"
-            docker cp jenkins_api_test:/app/reports ./reports 2>/dev/null || true
-
-            # salva logs do container
-            docker logs jenkins_api_test --tail 500 > logs/pytest_fallback.out 2>&1 || true
-
-            # cleanup
-            docker rm -f jenkins_api_test 2>/dev/null || true
-            docker-compose down || true
+            cp "$ENV_FILE" ./.env
+            echo "[ci] .env copiado para workspace"
           '''
-          // Agora o junit step tenta ler o arquivo do workspace
-          junit 'reports/junit.xml'
-          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
-        } else {
-          bat """
-            @echo off
-            copy /Y "%ENV_FILE%" .env >nul
-            if not exist reports mkdir reports
-            if not exist logs mkdir logs
-
-            rem cleanup
-            docker rm -f jenkins_api_test 2>nul || echo no_container
-
-            docker-compose down --remove-orphans || exit /b 0
-            docker-compose pull || exit /b 0
-            docker-compose up -d db
-            echo esperando DB inicializar...
-            timeout /t 8 /nobreak >nul
-
-            rem build image (log)
-            docker build -t api-bolamarcada:jenkins . > logs\\build_image.log 2>&1 || echo build_failed
-
-            rem run tests (image is linux-based; use sh -c). Note: do NOT pass --rm so we can docker cp afterwards
-            docker-compose run --no-deps --name jenkins_api_test api sh -c "python -m pytest -q --junitxml=/app/reports/junit.xml" || echo pytest_failed
-
-            rem copy reports from container to workspace
-            echo Tentando docker cp...
-            docker cp jenkins_api_test:/app/reports .\\reports 2>nul || echo DOCKER_CP_FAILED
-
-            rem save container logs
-            docker logs jenkins_api_test --tail 500 > logs\\pytest_fallback.out 2>&1 || echo LOG_FAIL
-
-            rem cleanup
-            docker rm -f jenkins_api_test 2>nul || echo no_container
-            docker-compose down || exit /b 0
-          """
-          // junit step reads from workspace
-          junit 'reports/junit.xml'
-          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
         }
-      } // withCredentials
-      echo "Stage Tests finalizada."
-    }
-
-    stage('Build (package)') {
-      echo "Empacotando artefatos..."
-      if (isUnix()) {
-        sh '''
-          if [ -f pyproject.toml ]; then
-            docker-compose run --rm api sh -c "python -m pip install --upgrade pip build || true"
-            docker-compose run --rm api sh -c "python -m build || true"
-          else
-            docker build -t api-bolamarcada:ci . > logs/build_package.log 2>&1 || true
-          fi
-        '''
-      } else {
-        bat """
-          @echo off
-          if exist pyproject.toml (
-            docker-compose run --rm api sh -c "python -m pip install --upgrade pip build" || echo build_fail
-            docker-compose run --rm api sh -c "python -m build" || echo build_fail
-          ) else (
-            docker build -t api-bolamarcada:ci . > logs\\build_package.log 2>&1 || echo build_fail
-          )
-        """
       }
-      archiveArtifacts artifacts: 'dist/**', allowEmptyArchive: true
-      echo "Stage Build finalizada."
     }
 
-  } catch (err) {
-    buildStatus = 'FAILURE'
-    currentBuild.result = 'FAILURE'
-    echo "Pipeline falhou: ${err}"
-    throw err
-  } finally {
-    // Notify (sempre)
-    echo "Enviando notificação de fim de pipeline (status: ${buildStatus})..."
-    try {
+    stage('Testes (pytest)') {
+      steps {
+        sh '''
+          set -e
+          mkdir -p reports artifacts
+          # Sobe somente o banco
+          docker compose up -d db
+        '''
+        // roda pytest dentro do serviço api (usa env_file .env)
+        sh '''
+          set -e
+          # Aguarda o Postgres ficar pronto a partir do container da api (que herda env_file)
+          docker compose run --rm api sh -lc '
+            until pg_isready -h db -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do
+              echo "Aguardando Postgres..." && sleep 1
+            done
+            mkdir -p reports
+            pytest --junitxml=reports/junit.xml -q
+          '
+          # Copia relatórios do volume (./ -> /app) já estão no host por causa do bind mount
+        '''
+      }
+      post {
+        always {
+          // Publica JUnit e guarda relatórios (mesmo se falhar)
+          junit allowEmptyResults: true, testResults: 'reports/junit.xml'
+          archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+          sh 'docker compose down -v || true'
+        }
+      }
+    }
+
+    stage('Build & Package (Docker)') {
+      steps {
+        sh '''
+          set -e
+          # Build direto pelo Dockerfile (mais simples de etiquetar)
+          docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .
+          docker image ls ${IMAGE_NAME}:${IMAGE_TAG}
+          # Empacota a imagem como artefato .tar
+          docker save -o artifacts/${IMAGE_NAME}_${IMAGE_TAG}.tar ${IMAGE_NAME}:${IMAGE_TAG}
+        '''
+        archiveArtifacts artifacts: 'artifacts/*.tar', onlyIfSuccessful: true
+      }
+    }
+  }
+
+  post {
+    always {
+      // Notificação por e-mail via scripts/notify.py dentro de um contêiner Python
       withCredentials([
         usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
         string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
       ]) {
-        if (isUnix()) {
-          sh """
-            export SMTP_HOST=${SMTP_HOST}
-            export SMTP_PORT=${SMTP_PORT}
-            export SMTP_USER=${SMTP_USER}
-            export SMTP_PASS=${SMTP_PASS}
-            export EMAIL_TO=${EMAIL_TO}
-            python3 scripts/notify.py --status "${buildStatus}" --run-id "${env.BUILD_ID}" --repo "${env.GIT_URL}" --branch "${env.GIT_BRANCH ?: 'main'}" || echo "notify script returned non-zero"
-          """
-        } else {
-          bat """
-            @echo off
-            set SMTP_HOST=${SMTP_HOST}
-            set SMTP_PORT=${SMTP_PORT}
-            set SMTP_USER=%SMTP_USER%
-            set SMTP_PASS=%SMTP_PASS%
-            set EMAIL_TO=%EMAIL_TO%
-            "${WIN_PY}" scripts\\notify.py --status "${buildStatus}" --run-id "${env.BUILD_ID}" --repo "${env.GIT_URL}" --branch "${env.GIT_BRANCH ?: 'main'}" || echo notify_failed
-          """
-        }
-      }
-      echo "Notificação enviada (ou tentativa concluída)."
-    } catch (notifErr) {
-      echo "Falha ao enviar notificação: ${notifErr}"
-    }
+        sh '''
+          set -e
+          STATUS="${currentBuild.currentResult}"
+          REPO="$(git config --get remote.origin.url || echo unknown)"
+          BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
+          RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
 
-    // cleanup .env
-    try {
-      if (isUnix()) {
-        sh 'if [ -f .env ]; then rm -f .env; fi || true'
-      } else {
-        bat 'if exist .env del /Q .env'
+          # roda notify.py sem depender de Python no agente
+          docker run --rm -v "$PWD:/app" -w /app \
+            -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
+            -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
+            python:3.13-slim sh -lc "pip install --no-cache-dir --disable-pip-version-check --quiet smtplib || true; python scripts/notify.py --status \\"$STATUS\\" --run-id \\"$RUNID\\" --repo \\"$REPO\\" --branch \\"$BRANCH\\""
+        '''
       }
-    } catch (cleanupErr) {
-      echo "Aviso: falha ao remover .env: ${cleanupErr}"
+      // Limpeza leve (não remove a imagem empacotada porque já viramos artefato .tar)
+      sh 'docker system prune -f || true'
     }
-
-    echo "Fim do pipeline. Resultado: ${buildStatus}"
   }
 }
