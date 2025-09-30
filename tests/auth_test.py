@@ -138,6 +138,7 @@ def test_token_route_integration(client, db_session):
     assert decoded == str(user.id) or decoded.get("sub") == str(user.id)
 
 
+# Teste 5: rota /users/me integração
 def test_update_me_route_success():
     client = make_client()
 
@@ -172,7 +173,7 @@ def test_update_me_route_success():
         assert len(args) == 3
         assert getattr(args[1], "email", None) == "auth@example.com"
 
-
+# Teste 6: rota DELETE /users/me integração (soft delete padrão)
 def test_delete_me_route_soft_default_204():
     client = make_client()
 
