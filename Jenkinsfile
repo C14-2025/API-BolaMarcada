@@ -249,7 +249,7 @@ $args = @(
         script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
 
         // 1) Release com junit.xml + build-info.txt
-        withCredentials([string(credentialsId: 'github-pat', variable: 'GITHUB_TOKEN')]) {
+        withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
           script {
             if (isUnix()) {
               sh '''
