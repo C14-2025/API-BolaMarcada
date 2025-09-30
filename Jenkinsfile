@@ -69,7 +69,7 @@ YAML
             '''
           } else {
             powershell '''
-$override = @"
+$override = @'
 services:
   db:
     ports: []
@@ -83,7 +83,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-"@
+'@
 [System.IO.File]::WriteAllText((Join-Path $Env:WORKSPACE "docker-compose.ci.yml"), $override)
             '''
           }
@@ -128,7 +128,9 @@ $Env:POSTGRES_USER     = $Env:DB_USR
 $Env:POSTGRES_PASSWORD = $Env:DB_PSW
 
 # (failsafe) se existir algum container publicando 5433, para
-$ids = docker ps --format "{{.ID}} {{.Ports}}" | Select-String ":5433->" | ForEach-Object { ($_.ToString() -split '\s+')[0] }
+$ids = docker ps --format "{{.ID}} {{.Ports}}" `
+  | Select-String ":5433->" `
+  | ForEach-Object { $_.ToString().Trim().Split(' ',[System.StringSplitOptions]::RemoveEmptyEntries)[0] }
 if ($ids) { $ids | ForEach-Object { Write-Host "[ci] Parando container que usa 5433: $_"; docker stop $_ | Out-Null } }
 
 $composeCmd = 'docker compose'
