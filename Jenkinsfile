@@ -113,7 +113,9 @@ services:
               trap cleanup EXIT
 
               $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml up -d db
-              $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash scripts/run_tests.sh
+
+              # (opcional) normaliza finais de linha do script
+              $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash -lc 'sed -i "s/\\r$//" scripts/run_tests.sh; bash scripts/run_tests.sh'
             '''
           } else {
             powershell '''
@@ -126,12 +128,6 @@ $Env:COMPOSE_PROJECT_NAME = "fastapi-ci-$Env:BUILD_NUMBER"
 $Env:POSTGRES_USER     = $Env:DB_USR
 $Env:POSTGRES_PASSWORD = $Env:DB_PSW
 
-# (failsafe) se existir algum container publicando 5433, para
-$ids = docker ps --format "{{.ID}} {{.Ports}}" `
-  | Select-String ":5433->" `
-  | ForEach-Object { $_.ToString().Trim().Split(' ',[System.StringSplitOptions]::RemoveEmptyEntries)[0] }
-if ($ids) { $ids | ForEach-Object { Write-Host "[ci] Parando container que usa 5433: $_"; docker stop $_ | Out-Null } }
-
 $composeCmd = 'docker compose'
 try { docker compose version | Out-Null } catch {
   if (Get-Command docker-compose -ErrorAction SilentlyContinue) { $composeCmd = 'docker-compose' }
@@ -143,7 +139,8 @@ $ci  = Join-Path $Env:WORKSPACE 'docker-compose.ci.yml'
 
 Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" up -d db"
 try {
-  Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" run --rm api bash scripts/run_tests.sh"
+  # (opcional) normaliza CRLF antes de executar
+  Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" run --rm api bash -lc 'sed -i ""s/\r$//"" scripts/run_tests.sh; bash scripts/run_tests.sh'"
 } finally {
   try { Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" down -v" } catch { Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)" }
 }
@@ -159,20 +156,23 @@ try {
       }
     }
 
-    stage('Build & Package (Docker)') {
-      steps {
-        script {
-          if (isUnix()) {
-            sh '''
-              set -e
-              mkdir -p artifacts
-              if [ -z "${IMAGE_TAG}" ]; then export IMAGE_TAG="${BUILD_NUMBER}-local"; fi
-              docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .
-              docker image ls ${IMAGE_NAME}:${IMAGE_TAG}
-              docker save -o artifacts/${IMAGE_NAME}_${IMAGE_TAG}.tar ${IMAGE_NAME}:${IMAGE_TAG}
-            '''
-          } else {
-            powershell '''
+    // ====== AQUI vem o paralelo exigido (Empacotamento + Notificação) ======
+    stage('Paralelo: Empacotamento + Notificação') {
+      parallel {
+        stage('Empacotamento (Docker)') {
+          steps {
+            script {
+              if (isUnix()) {
+                sh '''
+                  set -e
+                  mkdir -p artifacts
+                  if [ -z "${IMAGE_TAG}" ]; then export IMAGE_TAG="${BUILD_NUMBER}-local"; fi
+                  docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .
+                  docker image ls ${IMAGE_NAME}:${IMAGE_TAG}
+                  docker save -o artifacts/${IMAGE_NAME}_${IMAGE_TAG}.tar ${IMAGE_NAME}:${IMAGE_TAG}
+                '''
+              } else {
+                powershell '''
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
 if ([string]::IsNullOrWhiteSpace($Env:IMAGE_TAG)) { $Env:IMAGE_TAG = "$($Env:BUILD_NUMBER)-local" }
@@ -182,43 +182,93 @@ docker build -t "$tag" -f Dockerfile .
 docker image ls "$tag"
 docker save -o "$archive" "$tag"
 '''
+              }
+            }
+            archiveArtifacts artifacts: 'artifacts/*.tar', onlyIfSuccessful: true
           }
         }
-        archiveArtifacts artifacts: 'artifacts/*.tar', onlyIfSuccessful: true
+
+        stage('Notificação (paralela)') {
+          steps {
+            withCredentials([
+              usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
+              string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
+            ]) {
+              script {
+                if (isUnix()) {
+                  sh '''
+                    set -e
+                    STATUS="IN_PROGRESS"
+                    REPO="$(git config --get remote.origin.url || echo unknown)"
+                    BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
+                    RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
+
+                    docker run --rm -v "$PWD:/app" -w /app \
+                      -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
+                      -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
+                      python:3.13-slim python scripts/notify.py \
+                        --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
+                  '''
+                } else {
+                  powershell '''
+$ErrorActionPreference = "Stop"
+$STATUS = "IN_PROGRESS"
+$REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
+$BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
+$RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
+
+$volume = "$($Env:WORKSPACE):/app"
+$args = @(
+  'run','--rm','-v', $volume,'-w','/app',
+  '-e', "SMTP_HOST=$($Env:SMTP_HOST)",
+  '-e', "SMTP_PORT=$($Env:SMTP_PORT)",
+  '-e', "SMTP_USER=$($Env:SMTP_USER)",
+  '-e', "SMTP_PASS=$($Env:SMTP_PASS)",
+  '-e', "EMAIL_TO=$($Env:EMAIL_TO)",
+  'python:3.13-slim',
+  'python','scripts/notify.py',
+  '--status', $STATUS,
+  '--run-id', $RUNID,
+  '--repo', $REPO,
+  '--branch', $BRANCH
+)
+& docker @args
+                  '''
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
 
   post {
-  always {
-    // === coloca o status do build em uma env acessível ao shell/pwsh ===
-    script {
-      env.CI_STATUS = currentBuild.currentResult ?: 'UNKNOWN'
-    }
+    always {
+      // status final disponível para shells
+      script { env.CI_STATUS = currentBuild.currentResult ?: 'UNKNOWN' }
 
-    withCredentials([
-      usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
-      string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
-    ]) {
-      script {
-        if (isUnix()) {
-          // Linux: usa $CI_STATUS em vez de ${currentBuild.currentResult}
-          sh '''
-            set -e
-            STATUS="${CI_STATUS}"
-            REPO="$(git config --get remote.origin.url || echo unknown)"
-            BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
-            RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
+      withCredentials([
+        usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
+        string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
+      ]) {
+        script {
+          if (isUnix()) {
+            sh '''
+              set -e
+              STATUS="${CI_STATUS}"
+              REPO="$(git config --get remote.origin.url || echo unknown)"
+              BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
+              RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
 
-            docker run --rm -v "$PWD:/app" -w /app \
-              -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
-              -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
-              python:3.13-slim python scripts/notify.py \
-                --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-          '''
-        } else {
-          // Windows: usa array de argumentos + $Env:CI_STATUS
-          powershell '''
+              docker run --rm -v "$PWD:/app" -w /app \
+                -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
+                -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
+                python:3.13-slim python scripts/notify.py \
+                  --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
+            '''
+          } else {
+            powershell '''
 $ErrorActionPreference = "Stop"
 $STATUS = if ($Env:CI_STATUS) { $Env:CI_STATUS } else { "UNKNOWN" }
 $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
@@ -241,22 +291,22 @@ $args = @(
   '--branch', $BRANCH
 )
 & docker @args
+            '''
+          }
+        }
+      }
+
+      // limpeza do docker
+      script {
+        if (isUnix()) {
+          sh 'docker system prune -f || true'
+        } else {
+          powershell '''
+$ErrorActionPreference = "SilentlyContinue"
+try { docker system prune -f | Out-Null } catch { Write-Warning "Falha ao limpar docker: $($_.Exception.Message)" }
           '''
         }
       }
     }
-
-    // limpeza do docker
-    script {
-      if (isUnix()) {
-        sh 'docker system prune -f || true'
-      } else {
-        powershell '''
-$ErrorActionPreference = "SilentlyContinue"
-try { docker system prune -f | Out-Null } catch { Write-Warning "Falha ao limpar docker: $($_.Exception.Message)" }
-        '''
-      }
-    }
   }
-}
 }
