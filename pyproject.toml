@@ -11,5 +11,9 @@ authors = [
 ]
 dependencies = [
   "fastapi",
-  "uvicorn"
+  "uvicorn",
+  "sqlalchemy"
 ]
+
+[tool.setuptools]
+packages = ["core", "models", "routes", "schemas", "services", "utils"]
