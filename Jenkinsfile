@@ -1,4 +1,4 @@
-// Jenkinsfile (Scripted Pipeline — compatível com mais versões do Jenkins)
+// Jenkinsfile (Scripted) — compatível com agentes Unix e Windows
 node {
   try {
     stage('Checkout') {
@@ -8,53 +8,84 @@ node {
 
     stage('Tests') {
       echo "Instalando dependências e rodando testes (pytest)..."
-      // Ajuste caso precise de python3 em outro nome
-      sh '''
-        python3 -m pip install --upgrade pip || true
-        if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
-        pytest -q || true
-      '''
+      if (isUnix()) {
+        // Unix / Linux
+        sh '''
+          python3 -m pip install --upgrade pip || true
+          if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
+          pytest -q
+        '''
+      } else {
+        // Windows
+        bat """
+          @echo off
+          python -m pip install --upgrade pip
+          if exist requirements.txt (
+             python -m pip install -r requirements.txt
+          )
+          pytest -q
+        """
+      }
       echo "Testes finalizados (ver logs acima)."
     }
 
     stage('Build') {
-      echo "Empacotamento/build (somente exemplo — ajuste conforme seu fluxo)..."
-      // Se você usa python build:
-      sh '''
-        if [ -f pyproject.toml ]; then
-          python3 -m pip install build || true
-          python3 -m build || true
-        else
-          echo "Sem pyproject.toml — pulando build python (ou ajuste para docker build)..."
-        fi
-      '''
+      echo "Empacotamento / Build (ajuste conforme necessário)..."
+      if (isUnix()) {
+        sh '''
+          if [ -f pyproject.toml ]; then
+            python3 -m pip install --upgrade pip build || true
+            python3 -m build || true
+          else
+            echo "Sem pyproject.toml — pulando build python."
+          fi
+        '''
+      } else {
+        bat """
+          @echo off
+          if exist pyproject.toml (
+            python -m pip install --upgrade pip build
+            python -m build
+          ) else (
+            echo Sem pyproject.toml - pulando build python.
+          )
+        """
+      }
       echo "Build concluído."
     }
 
     stage('Notify') {
-      // injeta credenciais que você já criou no Jenkins
+      // usa as credenciais que você já criou (mailtrap-smtp e EMAIL_TO)
       withCredentials([
         usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
         string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
       ]) {
-        // define host/port e chama o script de notificação python
-        // ajuste 'python3' para 'python' caso seu agente use esse binário
-        sh '''
-          export SMTP_HOST=sandbox.smtp.mailtrap.io
-          export SMTP_PORT=2525
-          echo "Enviando notificação para: $EMAIL_TO (via Mailtrap)..."
-          python3 scripts/notify.py --status "tests,build" --run-id "${BUILD_ID}" --repo "${GIT_URL}" --branch "${GIT_BRANCH:-main}"
-        '''
+        if (isUnix()) {
+          sh """
+            export SMTP_HOST=sandbox.smtp.mailtrap.io
+            export SMTP_PORT=2525
+            echo "Enviando notificação para: ${EMAIL_TO}"
+            python3 scripts/notify.py --status "tests,build" --run-id "${env.BUILD_ID}" --repo "${env.GIT_URL}" --branch "${env.GIT_BRANCH ?: 'main'}"
+          """
+        } else {
+          // Windows bat: note que %EMAIL_TO% é lido em tempo de execução pelo agente
+          bat """
+            @echo off
+            set SMTP_HOST=sandbox.smtp.mailtrap.io
+            set SMTP_PORT=2525
+            echo Enviando notificação para: %EMAIL_TO%
+            python scripts\\notify.py --status "tests,build" --run-id "${env.BUILD_ID}" --repo "${env.GIT_URL}" --branch "${env.GIT_BRANCH ?: 'main'}"
+          """
+        }
       }
       echo "Stage Notify finalizada."
     }
 
   } catch (err) {
-    // em caso de falha, marca build como failed e re-lança o erro
     currentBuild.result = 'FAILURE'
     echo "Pipeline falhou: ${err}"
     throw err
   } finally {
-    echo "Fim do node."
+    echo "Fim do pipeline."
   }
 }
