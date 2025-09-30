@@ -99,7 +99,9 @@ class Review(Base):
 
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
-    field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
+    sports_center_id = Column(
+        "sports_center_id", Integer, ForeignKey("sports_centers.id"), nullable=False
+    )
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # Campos
