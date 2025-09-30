@@ -9,18 +9,21 @@ pipeline {
 
   environment {
     DOCKER_BUILDKIT = '1'
-    IMAGE_NAME = 'ci-api'     // nome lógico local
-    IMAGE_TAG  = ''           // setado no Checkout
+    IMAGE_NAME = 'ci-api'
+    IMAGE_TAG  = ''
     SMTP_HOST  = 'smtp.mailtrap.io'
     SMTP_PORT  = '2525'
   }
 
   stages {
+
     stage('Checkout') {
       steps {
         checkout scm
         script {
-          env.GIT_SHORT = sh(script: 'git rev-parse --short HEAD || echo local', returnStdout: true).trim()
+          // pega o hash curto do git no Windows
+          bat '@echo off\r\ngit rev-parse --short HEAD > gitshort.txt 2>nul\r\nif errorlevel 1 (echo local>gitshort.txt)\r\n'
+          env.GIT_SHORT = readFile('gitshort.txt').trim()
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_SHORT}"
         }
       }
@@ -29,56 +32,60 @@ pipeline {
     stage('Preparar .env') {
       steps {
         withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
-          sh '''
-            set -e
-            cp "$ENV_FILE" ./.env
-            echo "[ci] .env copiado para workspace"
-          '''
+          bat '@echo off\r\ncopy /Y "%ENV_FILE%" ".\\.env"\r\necho [ci] .env copiado\r\n'
         }
       }
     }
 
     stage('Testes (pytest)') {
       steps {
-        sh '''
-          set -e
-          mkdir -p reports artifacts
-
-          # Detecta docker compose vs docker-compose
-          compose_cmd="docker compose"
-          if ! docker compose version >/dev/null 2>&1; then
-            if command -v docker-compose >/dev/null 2>&1; then
-              compose_cmd="docker-compose"
-            fi
-          fi
-          echo "Usando: $compose_cmd"
-
-          # Sobe apenas o DB
-          $compose_cmd up -d db
-
-          # Roda testes dentro do serviço api
-          $compose_cmd run --rm api sh -lc '
-            set -e
-            # Espera db responder (sem depender de pg_isready)
-            python - <<PY
-import socket, time
-host="db"; port=5432
+        // cria um script simples para esperar o DB dentro do container
+        script {
+          writeFile file: 'scripts/wait_db.py', text: '''
+import socket, time, sys
+host='db'; port=5432
 for i in range(120):
     try:
-        with socket.create_connection((host, port), timeout=1):
-            print("db pronto"); break
+        s=socket.create_connection((host,port),1); s.close(); print('db pronto'); break
     except Exception:
-        print("aguardando db..."); time.sleep(1)
+        print('aguardando db...'); time.sleep(1)
 else:
-    raise SystemExit("db nao respondeu")
-PY
-            mkdir -p reports
-            pytest --junitxml=reports/junit.xml -q
-          '
+    sys.exit('db nao respondeu')
+'''.stripIndent()
+        }
 
-          # Derruba serviços usados nos testes
-          $compose_cmd down -v || true
-        '''
+        bat """@echo off
+setlocal enabledelayedexpansion
+if not exist reports mkdir reports
+if not exist artifacts mkdir artifacts
+
+REM Detecta docker compose vs docker-compose
+set COMPOSE_CMD=docker compose
+docker compose version >NUL 2>&1
+if errorlevel 1 (
+  where docker-compose >NUL 2>&1
+  if errorlevel 1 (
+    echo ERRO: docker compose/docker-compose nao encontrado.
+    exit /b 2
+  ) else (
+    set COMPOSE_CMD=docker-compose
+  )
+)
+echo Usando: !COMPOSE_CMD!
+
+REM Sobe apenas o DB
+!COMPOSE_CMD! up -d db
+if errorlevel 1 exit /b %ERRORLEVEL%
+
+REM Roda o wait + pytest dentro do serviço api
+!COMPOSE_CMD! run --rm api sh -lc "python scripts/wait_db.py && mkdir -p reports && pytest --junitxml=reports/junit.xml -q"
+set EXITCODE=%ERRORLEVEL%
+
+REM Derruba containers usados nos testes (e volumes)
+!COMPOSE_CMD! down -v
+
+exit /b %EXITCODE%
+"""
       }
       post {
         always {
@@ -90,12 +97,15 @@ PY
 
     stage('Build & Package (Docker)') {
       steps {
-        sh '''
-          set -e
-          docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .
-          docker image ls ${IMAGE_NAME}:${IMAGE_TAG}
-          docker save -o artifacts/${IMAGE_NAME}_${IMAGE_TAG}.tar ${IMAGE_NAME}:${IMAGE_TAG}
-        '''
+        bat """@echo off
+docker build -t %IMAGE_NAME%:%IMAGE_TAG% -f Dockerfile .
+if errorlevel 1 exit /b %ERRORLEVEL%
+
+docker image ls %IMAGE_NAME%:%IMAGE_TAG%
+
+if not exist artifacts mkdir artifacts
+docker save -o artifacts\\%IMAGE_NAME%_%IMAGE_TAG%.tar %IMAGE_NAME%:%IMAGE_TAG%
+"""
         archiveArtifacts artifacts: 'artifacts/*.tar', onlyIfSuccessful: true
       }
     }
@@ -107,20 +117,22 @@ PY
         usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
         string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
       ]) {
-        sh '''
-          set -e
-          STATUS="${currentBuild.currentResult}"
-          REPO="$(git config --get remote.origin.url || echo unknown)"
-          BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
-          RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
+        script {
+          def status = currentBuild.currentResult
+          def repo   = bat(returnStdout:true, script:'@echo off\r\ngit config --get remote.origin.url 2>nul\r\n').trim()
+          def branch = bat(returnStdout:true, script:'@echo off\r\ngit rev-parse --abbrev-ref HEAD 2>nul\r\n').trim()
+          def runid  = env.BUILD_URL ? env.BUILD_URL : "${env.JOB_NAME}#${env.BUILD_NUMBER}"
 
-          docker run --rm -v "$PWD:/app" -w /app \
-            -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
-            -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
-            python:3.13-slim sh -lc "python scripts/notify.py --status \\"$STATUS\\" --run-id \\"$RUNID\\" --repo \\"$REPO\\" --branch \\"$BRANCH\\""
-        '''
+          bat """@echo off
+docker run --rm -v "%CD%:/app" -w /app ^
+  -e SMTP_HOST=%SMTP_HOST% -e SMTP_PORT=%SMTP_PORT% ^
+  -e SMTP_USER=%SMTP_USER% -e SMTP_PASS=%SMTP_PASS% -e EMAIL_TO=%EMAIL_TO% ^
+  python:3.13-slim sh -lc "python scripts/notify.py --status \\"${status}\\" --run-id \\"${runid}\\" --repo \\"${repo}\\" --branch \\"${branch}\\""
+"""
+        }
       }
-      sh 'docker system prune -f || true'
+      // limpeza leve; ignora erro se docker não estiver presente
+      bat 'docker system prune -f >NUL 2>&1 || exit /b 0'
     }
   }
 }
