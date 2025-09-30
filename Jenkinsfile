@@ -322,7 +322,9 @@ try {
     $res = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases/tags/$TAG" -Headers $Headers
   } else { throw }
 }
-$uploadUrl = $res.upload_url -replace '\{.*$',''  # já vem com uploads.github.com
+
+# remove o sufixo "{...}" da URL de upload sem regex (evita conflito no Groovy)
+$uploadUrl = $res.upload_url.Split('{')[0]
 
 # arquivos para enviar
 $files = @("reports/junit.xml","build-info.txt")
