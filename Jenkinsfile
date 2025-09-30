@@ -117,7 +117,6 @@ $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml up -d db
 $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash -lc 'tr -d "\\r" < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh'
 '''
           } else {
-            // Windows/PowerShell com passagem de argumentos (sem Invoke-Expression)
             powershell '''
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path "reports" | Out-Null
@@ -131,12 +130,10 @@ $Env:POSTGRES_PASSWORD = $Env:DB_PSW
 $dc  = Join-Path $Env:WORKSPACE 'docker-compose.yml'
 $ci  = Join-Path $Env:WORKSPACE 'docker-compose.ci.yml'
 
-# docker compose up -d db
 $upArgs = @('compose','-f', $dc, '-f', $ci, 'up','-d','db')
 & docker @upArgs
 
 try {
-  # Comando que será passado ao bash -lc
   $cmdStr = "tr -d '\r' < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh"
   $runArgs = @('compose','-f', $dc, '-f', $ci, 'run','--rm','api','bash','-lc', $cmdStr)
   & docker @runArgs
@@ -285,11 +282,13 @@ docker run --rm -v "$PWD:/w" -w /w \
   ghcr.io/cli/cli:latest sh -lc 'set -- artifacts/*.tar; if [ -e "$1" ]; then gh release upload "$TAG" "$@" --repo "$REPO_SLUG" --clobber; fi'
 '''
             } else {
-              // Windows: usa REST API (sem precisar do gh cli)
+              // Windows: usa REST API (robusto) — CORRIGIDO AQUI
               powershell '''
 $ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ProgressPreference = 'SilentlyContinue'
 
-$TAG = "build-$($Env:BUILD_NUMBER)-$($Env:GIT_SHORT)"
+$TAG   = "build-$($Env:BUILD_NUMBER)-$($Env:GIT_SHORT)"
 $owner = $Env:REPO_SLUG.Split('/')[0]
 
 # build-info.txt
@@ -318,15 +317,29 @@ $body = @{
 } | ConvertTo-Json
 
 try {
-  $res = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases" -Headers $Headers -Body $body
+  $res = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases" -Headers $Headers -ContentType 'application/json' -Body $body
 } catch {
   if ($_.Exception.Response.StatusCode.Value__ -eq 422) {
     $res = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases/tags/$TAG" -Headers $Headers
   } else { throw }
 }
 
-# upload_url vem como "...{?name,label}" -> corta antes do '{' (sem regex p/ evitar conflito no Groovy)
-$uploadUrl = $res.upload_url.Split('{')[0]
+# calcula URL de upload de forma resiliente
+$uploadBase = $null
+if ($res.upload_url) {
+  $uploadBase = ($res.upload_url -split '\{')[0]
+} elseif ($res.assets_url) {
+  # troca host api.github.com -> uploads.github.com
+  $uploadBase = ($res.assets_url -replace '^https://api\.github\.com','https://uploads.github.com')
+} else {
+  throw "GitHub release response sem upload_url/assets_url: $( $res | ConvertTo-Json -Depth 5 )"
+}
+
+if ([string]::IsNullOrWhiteSpace($uploadBase) -or -not $uploadBase.StartsWith('https://')) {
+  throw "uploadBase inválido: '$uploadBase'"
+}
+
+Write-Host "Upload base: $uploadBase"
 
 # arquivos para enviar
 $files = @("reports/junit.xml","build-info.txt")
@@ -336,9 +349,14 @@ if ($tarFiles) { $files += $tarFiles.FullName }
 foreach ($f in $files) {
   if (Test-Path $f) {
     $name = [IO.Path]::GetFileName($f)
-    Invoke-RestMethod -Method Post -Uri "$uploadUrl?name=$name" `
+    $encoded = [uri]::EscapeDataString($name)
+    $uri = "$uploadBase?name=$encoded"
+    Invoke-RestMethod -Method Post -Uri $uri `
       -Headers @{ Authorization = $Headers.Authorization; "Content-Type" = "application/octet-stream"; "User-Agent" = "jenkins-ci" } `
       -InFile $f | Out-Null
+    Write-Host "Enviado: $name"
+  } else {
+    Write-Warning "Arquivo não encontrado: $f"
   }
 }
 '''
