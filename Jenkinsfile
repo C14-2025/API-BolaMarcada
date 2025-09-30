@@ -22,68 +22,56 @@ node {
     }
 
     stage('Tests (docker-compose)') {
-      echo "Usando secret file (.env) e docker-compose para rodar testes..."
-      // Espera que exista um credential Secret file com ID 'env-file'
-      withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
-        if (isUnix()) {
-          sh '''
-            # copia secret file para .env (workspace)
-            cp "$ENV_FILE" .env
+  echo "Usando secret file (.env) e docker-compose para rodar testes..."
+  withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
+    if (isUnix()) {
+      sh '''
+        cp "$ENV_FILE" .env
+        mkdir -p reports
 
-            # debug
-            docker --version || true
-            docker-compose --version || docker compose version || true
+        # remove container antigo se existir (evita conflito de nome)
+        docker rm -f postgres_bolamarcada || true
 
-            # cleanup e start db
-            docker-compose down --remove-orphans || true
-            docker-compose pull || true
-            docker-compose up -d db
+        docker-compose down --remove-orphans || true
+        docker-compose pull || true
+        docker-compose up -d db
 
-            # aguarda o DB inicializar (ajuste se necessário)
-            sleep 5
+        sleep 5
 
-            # opcional: rodar migrações
-            # docker-compose run --rm api alembic upgrade head
+        # opcional: docker-compose run --rm api alembic upgrade head
+        docker-compose run --rm api pytest -q --junitxml=reports/junit.xml
 
-            # roda testes dentro do container 'api' e gera junit
-            docker-compose run --rm api pytest -q --junitxml=reports/junit.xml
+        docker-compose down
+      '''
+      junit 'reports/junit.xml'
+      archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
+    } else {
+      bat """
+        @echo off
+        copy /Y "%ENV_FILE%" .env >nul
+        if not exist reports mkdir reports
 
-            # baixa e limpa
-            docker-compose down
-          '''
-          // publica relatório e artefatos
-          junit 'reports/junit.xml'
-          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
-        } else {
-          bat """
-            @echo off
-            REM copia secret file para .env no workspace
-            copy /Y "%ENV_FILE%" .env >nul
+        REM remove container antigo se existir
+        docker rm -f postgres_bolamarcada 2>nul || echo no_container
 
-            REM debug
-            docker --version || echo docker nao encontrado
-            docker-compose --version || docker compose version || echo docker-compose nao encontrado
+        docker-compose down --remove-orphans || exit /b 0
+        docker-compose pull || exit /b 0
+        docker-compose up -d db
+        timeout /t 5 /nobreak >nul
 
-            REM cleanup e start db
-            docker-compose down --remove-orphans || exit /b 0
-            docker-compose pull || exit /b 0
-            docker-compose up -d db
-            timeout /t 5 /nobreak >nul
+        REM docker-compose run --rm api alembic upgrade head
 
-            REM opcional: rodar migrações
-            REM docker-compose run --rm api alembic upgrade head
+        docker-compose run --rm api %COMSPEC% /C "python -m pytest -q --junitxml=reports\\junit.xml"
 
-            REM roda pytest dentro do container 'api' (gera reports/junit.xml)
-            docker-compose run --rm api %COMSPEC% /C "python -m pytest -q --junitxml=reports\\junit.xml"
-
-            docker-compose down
-          """
-          junit 'reports/junit.xml'
-          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
-        }
-      }
-      echo "Stage Tests finalizada."
+        docker-compose down
+      """
+      junit 'reports/junit.xml'
+      archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
     }
+  }
+  echo "Stage Tests finalizada."
+}
+
 
     stage('Build (package)') {
       echo "Empacotando artefatos (executa build dentro do container 'api' se aplicável)..."
