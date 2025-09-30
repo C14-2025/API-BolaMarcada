@@ -26,9 +26,7 @@ pipeline {
             env.GIT_SHORT = powershell(script: '''
 $ErrorActionPreference = "Stop"
 $git = git rev-parse --short HEAD 2>$null
-if ([string]::IsNullOrWhiteSpace($git)) {
-  $git = 'local'
-}
+if ([string]::IsNullOrWhiteSpace($git)) { $git = 'local' }
 $git
 ''', returnStdout: true).trim()
           }
@@ -39,21 +37,42 @@ $git
 
     stage('Preparar .env') {
       steps {
-        withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
-          script {
-            if (isUnix()) {
+        script {
+          if (isUnix()) {
+            withCredentials([string(credentialsId: 'app-env', variable: 'APP_ENV')]) {
               sh '''
                 set -e
-                cp "$ENV_FILE" ./.env
-                echo "[ci] .env copiado para workspace"
+                # grava .env a partir do Secret text e normaliza CRLF -> LF
+                printf "%s\n" "$APP_ENV" | tr -d '\\r' > .env
+                echo "[ci] .env criado a partir do credential 'app-env'"
+
+                # exporta as variáveis para este shell (útil caso algum passo precise direto)
+                set -a
+                . ./.env
+                set +a
               '''
-            } else {
+            }
+          } else {
+            withCredentials([string(credentialsId: 'app-env', variable: 'APP_ENV')]) {
               powershell '''
 $ErrorActionPreference = "Stop"
 $dest = Join-Path $PWD.Path '.env'
-Copy-Item -Path $Env:ENV_FILE -Destination $dest -Force
-Write-Host "[ci] .env copiado para workspace"
-'''
+# grava o conteúdo do Secret text no .env
+[System.IO.File]::WriteAllText($dest, $Env:APP_ENV)
+Write-Host "[ci] .env criado a partir do credential 'app-env'"
+
+# exporta as variáveis para o processo atual (caso algum passo use direto)
+Get-Content $dest | ForEach-Object {
+  if ($_ -match '^\s*#') { return }
+  if ($_ -match '^\s*$') { return }
+  $kv = $_ -split '=', 2
+  if ($kv.Count -eq 2) {
+    $k = $kv[0].Trim()
+    $v = $kv[1]
+    [System.Environment]::SetEnvironmentVariable($k, $v, 'Process')
+  }
+}
+              '''
             }
           }
         }
@@ -76,11 +95,10 @@ Write-Host "[ci] .env copiado para workspace"
               fi
               echo "Usando: $compose_cmd"
 
-              cleanup() {
-                $compose_cmd down -v || true
-              }
+              cleanup() { $compose_cmd down -v || true; }
               trap cleanup EXIT
 
+              # docker compose lê automaticamente o arquivo .env na raiz do projeto
               $compose_cmd up -d db
               $compose_cmd run --rm api bash scripts/run_tests.sh
             '''
@@ -91,24 +109,17 @@ New-Item -ItemType Directory -Force -Path "reports" | Out-Null
 New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
 
 $composeCmd = 'docker compose'
-try {
-  docker compose version | Out-Null
-} catch {
-  if (Get-Command docker-compose -ErrorAction SilentlyContinue) {
-    $composeCmd = 'docker-compose'
-  }
+try { docker compose version | Out-Null } catch {
+  if (Get-Command docker-compose -ErrorAction SilentlyContinue) { $composeCmd = 'docker-compose' }
 }
 Write-Host "Usando: $composeCmd"
 
+# docker compose carrega .env automaticamente
 Invoke-Expression "$composeCmd up -d db"
 try {
   Invoke-Expression "$composeCmd run --rm api bash scripts/run_tests.sh"
 } finally {
-  try {
-    Invoke-Expression "$composeCmd down -v"
-  } catch {
-    Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)"
-  }
+  try { Invoke-Expression "$composeCmd down -v" } catch { Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)" }
 }
 '''
           }
@@ -174,10 +185,8 @@ docker save -o "$archive" "$tag"
             powershell '''
 $ErrorActionPreference = "Stop"
 $STATUS = "${currentBuild.currentResult}"
-$REPO = git config --get remote.origin.url 2>$null
-if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
-$BRANCH = git rev-parse --abbrev-ref HEAD 2>$null
-if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
+$REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
+$BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
 $RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
 
 $volume = "${PWD.Path}:/app"
@@ -195,11 +204,7 @@ docker run --rm -v "$volume" -w /app `
         } else {
           powershell '''
 $ErrorActionPreference = "SilentlyContinue"
-try {
-  docker system prune -f | Out-Null
-} catch {
-  Write-Warning "Falha ao limpar docker: $($_.Exception.Message)"
-}
+try { docker system prune -f | Out-Null } catch { Write-Warning "Falha ao limpar docker: $($_.Exception.Message)" }
 '''
         }
       }
