@@ -26,9 +26,8 @@ node {
     // STAGE: Tests
     //////////////////////////
     stage('Tests (docker-compose)') {
-      echo "Usando secret file (.env) e docker-compose para rodar testes..."
+      echo "Usando secret file (.env) e docker-compose para rodar migrations + testes..."
       withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
-        // UNIX agent flow
         if (isUnix()) {
           sh '''
             # copia secret file para .env no workspace
@@ -39,7 +38,7 @@ node {
             docker rm -f postgres_bolamarcada || true
             docker rm -f fastapi-ci-db-1 || true
 
-            # garante estado limpo e sube DB
+            # garante estado limpo e sobe o DB
             docker-compose down --remove-orphans || true
             docker-compose pull || true
             docker-compose up -d db
@@ -47,7 +46,10 @@ node {
             # espera simples para o DB inicializar; aumentar se necessário
             sleep 6
 
-            # roda pytest dentro do container 'api' usando sh -c (resiliente para imagens Linux)
+            # garantir esquema: aplica migrations antes dos testes
+            docker-compose run --rm api sh -c "alembic upgrade head || true"
+
+            # roda pytest dentro do container 'api' usando sh -c (gera reports/junit.xml)
             docker-compose run --rm api sh -c "python -m pytest -q --junitxml=reports/junit.xml"
 
             # baixa e limpa
@@ -71,6 +73,9 @@ node {
             docker-compose pull || exit /b 0
             docker-compose up -d db
             timeout /t 6 /nobreak >nul
+
+            rem apply migrations inside the api container (ensures schema)
+            docker-compose run --rm api sh -c "alembic upgrade head || true"
 
             rem run pytest inside container using sh (image is linux)
             docker-compose run --rm api sh -c "python -m pytest -q --junitxml=reports\\junit.xml"
