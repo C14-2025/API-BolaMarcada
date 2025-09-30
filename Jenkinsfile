@@ -1,15 +1,16 @@
-// Jenkinsfile (Scripted) — testes via docker-compose + build + notify (mailto via Mailtrap)
-// Requisitos (já configurados):
+// Jenkinsfile (Scripted) — testes via docker-compose + build + notify (Mailtrap)
+// Requisitos no Jenkins:
 // - Secret file com ID 'env-file' (contendo .env)
 // - Credentials username+password com ID 'mailtrap-smtp'
-// - Secret text with ID 'EMAIL_TO' (ou string credential) - destinatário do e-mail
+// - Secret text/string credential with ID 'EMAIL_TO' (destinatário)
 // - scripts/notify.py presente no repo (usa SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_TO)
 // - docker & docker-compose disponíveis no agente Jenkins
 
 node {
-  // caminho absoluto do python no Windows (opcional — não necessário se o envío for feito em container)
+  // caminho absoluto do python no Windows (ajuste se necessário)
   def WIN_PY = 'C:\\\\Users\\\\jmxd\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'
-  // Mailtrap host/port (não secretos)
+
+  // Mailtrap host/port (padrões)
   def SMTP_HOST = 'sandbox.smtp.mailtrap.io'
   def SMTP_PORT = '2525'
 
@@ -21,69 +22,80 @@ node {
       echo "Checkout realizado."
     }
 
+    //////////////////////////
+    // STAGE: Tests
+    //////////////////////////
     stage('Tests (docker-compose)') {
-  echo "Usando secret file (.env) e docker-compose para rodar testes..."
-  withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
-    if (isUnix()) {
-      sh '''
-        cp "$ENV_FILE" .env
-        mkdir -p reports
+      echo "Usando secret file (.env) e docker-compose para rodar testes..."
+      withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
+        // UNIX agent flow
+        if (isUnix()) {
+          sh '''
+            # copia secret file para .env no workspace
+            cp "$ENV_FILE" .env
+            mkdir -p reports
 
-        # remove container antigo se existir (evita conflito de nome)
-        docker rm -f postgres_bolamarcada || true
+            # tenta remover containers órfãos que causam conflito (silencioso)
+            docker rm -f postgres_bolamarcada || true
+            docker rm -f fastapi-ci-db-1 || true
 
-        docker-compose down --remove-orphans || true
-        docker-compose pull || true
-        docker-compose up -d db
+            # garante estado limpo e sube DB
+            docker-compose down --remove-orphans || true
+            docker-compose pull || true
+            docker-compose up -d db
 
-        sleep 5
+            # espera simples para o DB inicializar; aumentar se necessário
+            sleep 6
 
-        # opcional: docker-compose run --rm api alembic upgrade head
-        docker-compose run --rm api pytest -q --junitxml=reports/junit.xml
+            # roda pytest dentro do container 'api' usando sh -c (resiliente para imagens Linux)
+            docker-compose run --rm api sh -c "python -m pytest -q --junitxml=reports/junit.xml"
 
-        docker-compose down
-      '''
-      junit 'reports/junit.xml'
-      archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
-    } else {
-      bat """
-        @echo off
-        copy /Y "%ENV_FILE%" .env >nul
-        if not exist reports mkdir reports
+            # baixa e limpa
+            docker-compose down
+          '''
+          junit 'reports/junit.xml'
+          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
+        } else {
+          // Windows agent flow (não usar %COMSPEC% para comando do container)
+          bat """
+            @echo off
+            rem copy secret file into workspace
+            copy /Y "%ENV_FILE%" .env >nul
+            if not exist reports mkdir reports
 
-        REM remove container antigo se existir
-        docker rm -f postgres_bolamarcada 2>nul || echo no_container
+            rem cleanup potential conflicting containers
+            docker rm -f postgres_bolamarcada 2>nul || echo no_container
+            docker rm -f fastapi-ci-db-1 2>nul || echo no_container
 
-        docker-compose down --remove-orphans || exit /b 0
-        docker-compose pull || exit /b 0
-        docker-compose up -d db
-        timeout /t 5 /nobreak >nul
+            docker-compose down --remove-orphans || exit /b 0
+            docker-compose pull || exit /b 0
+            docker-compose up -d db
+            timeout /t 6 /nobreak >nul
 
-        REM docker-compose run --rm api alembic upgrade head
+            rem run pytest inside container using sh (image is linux)
+            docker-compose run --rm api sh -c "python -m pytest -q --junitxml=reports\\junit.xml"
 
-        docker-compose run --rm api %COMSPEC% /C "python -m pytest -q --junitxml=reports\\junit.xml"
-
-        docker-compose down
-      """
-      junit 'reports/junit.xml'
-      archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
+            docker-compose down
+          """
+          junit 'reports/junit.xml'
+          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
+        }
+      } // withCredentials env-file end
+      echo "Stage Tests finalizada."
     }
-  }
-  echo "Stage Tests finalizada."
-}
 
-
+    //////////////////////////
+    // STAGE: Build / Package
+    //////////////////////////
     stage('Build (package)') {
-      echo "Empacotando artefatos (executa build dentro do container 'api' se aplicável)..."
-      // Tenta criar pacote Python (se houver pyproject) dentro do container api, gerando dist/
+      echo "Empacotando artefatos (tentando build dentro do container 'api' ou via docker build)..."
       if (isUnix()) {
         sh '''
-          # se você usa pyproject.toml, gerar wheel/sdist dentro do container
+          # se existir pyproject.toml, usar build; caso contrário, fallback para docker build
           if [ -f pyproject.toml ]; then
-            docker-compose run --rm api python -m pip install --upgrade pip build || true
-            docker-compose run --rm api python -m build || true
+            docker-compose run --rm api sh -c "python -m pip install --upgrade pip build || true"
+            docker-compose run --rm api sh -c "python -m build || true"
           else
-            # fallback: build via docker
             docker build -t api-bolamarcada:ci .
           fi
         '''
@@ -91,29 +103,28 @@ node {
         bat """
           @echo off
           if exist pyproject.toml (
-            docker-compose run --rm api %COMSPEC% /C "${WIN_PY} -m pip install --upgrade pip build" || exit /b 0
-            docker-compose run --rm api %COMSPEC% /C "${WIN_PY} -m build" || exit /b 0
+            docker-compose run --rm api sh -c "python -m pip install --upgrade pip build" || exit /b 0
+            docker-compose run --rm api sh -c "python -m build" || exit /b 0
           ) else (
             docker build -t api-bolamarcada:ci .
           )
         """
       }
-      // arquiva dist (pode estar no host via volume .:/app)
       archiveArtifacts artifacts: 'dist/**', allowEmptyArchive: true
       echo "Stage Build finalizada."
     }
 
   } catch (err) {
-    // marca falha e repassa
     buildStatus = 'FAILURE'
     currentBuild.result = 'FAILURE'
     echo "Pipeline falhou: ${err}"
     throw err
   } finally {
-    // --- NOTIFY (sempre executa) ---
+    //////////////////////////
+    // STAGE: Notify (always runs)
+    //////////////////////////
     echo "Enviando notificação de fim de pipeline (status: ${buildStatus})..."
 
-    // tentativa robusta de enviar email: injeta credenciais e chama scripts/notify.py
     try {
       withCredentials([
         usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
@@ -126,7 +137,6 @@ node {
             export SMTP_USER=${SMTP_USER}
             export SMTP_PASS=${SMTP_PASS}
             export EMAIL_TO=${EMAIL_TO}
-            # chama o script de notificação (usa o python do agente)
             python3 scripts/notify.py --status "${buildStatus}" --run-id "${env.BUILD_ID}" --repo "${env.GIT_URL}" --branch "${env.GIT_BRANCH ?: 'main'}" || echo "notify script returned non-zero"
           """
         } else {
@@ -137,7 +147,6 @@ node {
             set SMTP_USER=%SMTP_USER%
             set SMTP_PASS=%SMTP_PASS%
             set EMAIL_TO=%EMAIL_TO%
-            REM chama o script de notificação usando Python absoluto configurado (WIN_PY)
             "${WIN_PY}" scripts\\notify.py --status "${buildStatus}" --run-id "${env.BUILD_ID}" --repo "${env.GIT_URL}" --branch "${env.GIT_BRANCH ?: 'main'}" || echo notify_failed
           """
         }
@@ -147,7 +156,7 @@ node {
       echo "Falha ao enviar notificação: ${notifErr}"
     }
 
-    // cleanup: remove .env gerado (se existir) para não deixar segredos em workspace
+    // cleanup: remove .env gerado
     try {
       if (isUnix()) {
         sh 'if [ -f .env ]; then rm -f .env; fi || true'
