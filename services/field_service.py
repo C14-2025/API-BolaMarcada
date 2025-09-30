@@ -24,9 +24,11 @@ def create_field_service(db: Session, field_data: FieldCreate) -> int:
     db.refresh(new_field)
     return new_field.id
 
+
 def get_field_by_id(db: Session, field_id: int) -> Field:
     """Busca um campo pelo ID."""
     return db.query(Field).filter(Field.id == field_id).first()
+
 
 def delete_field_by_id(db: Session, field_id: int) -> None:
     """Deleta um campo pelo ID."""
