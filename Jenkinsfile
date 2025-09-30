@@ -5,34 +5,23 @@ pipeline {
     timestamps()
     buildDiscarder(logRotator(numToKeepStr: '20'))
     timeout(time: 45, unit: 'MINUTES')
-    // Se tiver o plugin AnsiColor, esta linha ativa cores nos logs.
-    // Se NÃO tiver, remova esta linha.
-    wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm'])
   }
 
   environment {
     DOCKER_BUILDKIT = '1'
-    IMAGE_NAME = 'ci-api'   // nome lógico local da imagem
-    IMAGE_TAG  = ''         // será setado no Checkout
+    IMAGE_NAME = 'ci-api'     // nome lógico local
+    IMAGE_TAG  = ''           // setado no Checkout
     SMTP_HOST  = 'smtp.mailtrap.io'
     SMTP_PORT  = '2525'
-    // COMPOSE_PROJECT_NAME será calculado no stage Checkout (via script {})
   }
 
   stages {
-
     stage('Checkout') {
       steps {
         checkout scm
         script {
-          // evita 'def' (que já deu parse error antes) e evita nome 'short'
           env.GIT_SHORT = sh(script: 'git rev-parse --short HEAD || echo local', returnStdout: true).trim()
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_SHORT}"
-
-          // Project name seguro p/ docker compose
-          def raw = "ci_${env.JOB_NAME}_${env.BUILD_NUMBER}"
-          env.COMPOSE_PROJECT_NAME = raw.replaceAll('[^a-zA-Z0-9]', '').toLowerCase()
-          echo "COMPOSE_PROJECT_NAME=${env.COMPOSE_PROJECT_NAME}"
         }
       }
     }
@@ -70,7 +59,7 @@ pipeline {
           # Roda testes dentro do serviço api
           $compose_cmd run --rm api sh -lc '
             set -e
-            # Espera DB só com Python padrão (sem pg_isready)
+            # Espera db responder (sem depender de pg_isready)
             python - <<PY
 import socket, time
 host="db"; port=5432
@@ -78,9 +67,8 @@ for i in range(120):
     try:
         with socket.create_connection((host, port), timeout=1):
             print("db pronto"); break
-    except Exception as e:
-        print("aguardando db...", e)
-        time.sleep(1)
+    except Exception:
+        print("aguardando db..."); time.sleep(1)
 else:
     raise SystemExit("db nao respondeu")
 PY
@@ -88,7 +76,7 @@ PY
             pytest --junitxml=reports/junit.xml -q
           '
 
-          # Derruba os serviços de teste
+          # Derruba serviços usados nos testes
           $compose_cmd down -v || true
         '''
       }
