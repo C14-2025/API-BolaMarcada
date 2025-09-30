@@ -1,6 +1,5 @@
-from pydantic import BaseModel
 from typing import Optional
-
+from pydantic import BaseModel, ConfigDict
 
 class SportsCenterCreate(BaseModel):
     user_id: str
@@ -8,12 +7,10 @@ class SportsCenterCreate(BaseModel):
     cnpj: str
     latitude: float
     longitude: float
-    photo_path: Optional[str]
-    description: Optional[str]
+    photo_path: Optional[str] = None
+    description: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)  # v2
 
 class SportsCenterResponse(BaseModel):
     id: int
@@ -22,12 +19,10 @@ class SportsCenterResponse(BaseModel):
     cnpj: str
     latitude: float
     longitude: float
-    photo_path: Optional[str]
-    description: Optional[str]
+    photo_path: Optional[str] = None
+    description: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 
 class SportsCenterUpdate(BaseModel):
     name: Optional[str] = None
@@ -35,3 +30,6 @@ class SportsCenterUpdate(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     photo_path: Optional[str] = None
+    description: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
