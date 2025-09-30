@@ -190,38 +190,42 @@ docker save -o "$archive" "$tag"
   }
 
   post {
-    always {
-      withCredentials([
-        usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
-        string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
-      ]) {
-        script {
-          if (isUnix()) {
-            sh '''
-              set -e
-              STATUS="${currentBuild.currentResult}"
-              REPO="$(git config --get remote.origin.url || echo unknown)"
-              BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
-              RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
+  always {
+    // === coloca o status do build em uma env acessível ao shell/pwsh ===
+    script {
+      env.CI_STATUS = currentBuild.currentResult ?: 'UNKNOWN'
+    }
 
-              docker run --rm -v "$PWD:/app" -w /app \
-                -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
-                -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
-                python:3.13-slim python scripts/notify.py \
-                  --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-            '''
-          } else {
-            powershell '''
+    withCredentials([
+      usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
+      string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
+    ]) {
+      script {
+        if (isUnix()) {
+          // Linux: usa $CI_STATUS em vez de ${currentBuild.currentResult}
+          sh '''
+            set -e
+            STATUS="${CI_STATUS}"
+            REPO="$(git config --get remote.origin.url || echo unknown)"
+            BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
+            RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
+
+            docker run --rm -v "$PWD:/app" -w /app \
+              -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
+              -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
+              python:3.13-slim python scripts/notify.py \
+                --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
+          '''
+        } else {
+          // Windows: usa array de argumentos + $Env:CI_STATUS
+          powershell '''
 $ErrorActionPreference = "Stop"
-$STATUS = "${currentBuild.currentResult}"
+$STATUS = if ($Env:CI_STATUS) { $Env:CI_STATUS } else { "UNKNOWN" }
 $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
 $BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
 $RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
 
-# volume com expansão segura
 $volume = "$($Env:WORKSPACE):/app"
-
-# chama docker run usando ARRAY de argumentos (sem malabarismo de aspas)
 $args = @(
   'run','--rm','-v', $volume,'-w','/app',
   '-e', "SMTP_HOST=$($Env:SMTP_HOST)",
@@ -237,20 +241,22 @@ $args = @(
   '--branch', $BRANCH
 )
 & docker @args
-'''
-          }
+          '''
         }
       }
-      script {
-        if (isUnix()) {
-          sh 'docker system prune -f || true'
-        } else {
-          powershell '''
+    }
+
+    // limpeza do docker
+    script {
+      if (isUnix()) {
+        sh 'docker system prune -f || true'
+      } else {
+        powershell '''
 $ErrorActionPreference = "SilentlyContinue"
 try { docker system prune -f | Out-Null } catch { Write-Warning "Falha ao limpar docker: $($_.Exception.Message)" }
-'''
-        }
+        '''
       }
     }
   }
 }
+
