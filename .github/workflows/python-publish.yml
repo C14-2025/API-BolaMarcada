@@ -29,33 +29,10 @@ jobs:
           name: release-dists
           path: dist/
 
-  pypi-publish:
-    runs-on: ubuntu-latest
-    needs:
-      - release-build
-    permissions:
-      id-token: write
-
-    environment:
-      name: pypi
-
-    steps:
-      - name: Retrieve release distributions
-        uses: actions/download-artifact@v4
-        with:
-          name: release-dists
-          path: dist/
-
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-
   test:
     runs-on: ubuntu-latest
     needs:
       - release-build
-      - pypi-publish
 
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +51,6 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - release-build
-      - pypi-publish
       - test
 
     steps:
