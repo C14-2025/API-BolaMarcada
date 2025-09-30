@@ -3,15 +3,17 @@ pipeline {
 
   options {
     timestamps()
-    ansiColor('xterm')
     buildDiscarder(logRotator(numToKeepStr: '20'))
     timeout(time: 45, unit: 'MINUTES')
+    // Se tiver o plugin AnsiColor, esta linha ativa cores nos logs.
+    // Se NÃO tiver, remova esta linha.
+    wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm'])
   }
 
   environment {
     DOCKER_BUILDKIT = '1'
-    IMAGE_NAME = 'ci-api'               // nome lógico local da imagem
-    IMAGE_TAG  = ''                     // será setado no Checkout
+    IMAGE_NAME = 'ci-api'   // nome lógico local da imagem
+    IMAGE_TAG  = ''         // será setado no Checkout
     SMTP_HOST  = 'smtp.mailtrap.io'
     SMTP_PORT  = '2525'
     // COMPOSE_PROJECT_NAME será calculado no stage Checkout (via script {})
@@ -23,11 +25,11 @@ pipeline {
       steps {
         checkout scm
         script {
-          // Evita 'def' e evita usar 'short' como nome
+          // evita 'def' (que já deu parse error antes) e evita nome 'short'
           env.GIT_SHORT = sh(script: 'git rev-parse --short HEAD || echo local', returnStdout: true).trim()
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_SHORT}"
 
-          // Calcula um project name seguro p/ docker compose
+          // Project name seguro p/ docker compose
           def raw = "ci_${env.JOB_NAME}_${env.BUILD_NUMBER}"
           env.COMPOSE_PROJECT_NAME = raw.replaceAll('[^a-zA-Z0-9]', '').toLowerCase()
           echo "COMPOSE_PROJECT_NAME=${env.COMPOSE_PROJECT_NAME}"
@@ -68,9 +70,9 @@ pipeline {
           # Roda testes dentro do serviço api
           $compose_cmd run --rm api sh -lc '
             set -e
-            # Espera DB sem depender do pg_isready (usa Python puro)
+            # Espera DB só com Python padrão (sem pg_isready)
             python - <<PY
-import os, socket, time
+import socket, time
 host="db"; port=5432
 for i in range(120):
     try:
@@ -92,7 +94,6 @@ PY
       }
       post {
         always {
-          // Publica JUnit e arquiva relatórios (mesmo se falhar)
           junit allowEmptyResults: true, testResults: 'reports/junit.xml'
           archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
         }
@@ -114,7 +115,6 @@ PY
 
   post {
     always {
-      // Notificação via scripts/notify.py (usa credenciais Mailtrap e EMAIL_TO)
       withCredentials([
         usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
         string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
@@ -126,14 +126,12 @@ PY
           BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
           RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
 
-          # Executa notify.py dentro de um container Python (sem depender do agente)
           docker run --rm -v "$PWD:/app" -w /app \
             -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
             -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
             python:3.13-slim sh -lc "python scripts/notify.py --status \\"$STATUS\\" --run-id \\"$RUNID\\" --repo \\"$REPO\\" --branch \\"$BRANCH\\""
         '''
       }
-      // Limpeza leve
       sh 'docker system prune -f || true'
     }
   }
