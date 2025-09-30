@@ -13,6 +13,7 @@ pipeline {
     IMAGE_TAG  = ''                 // setado no Checkout (fallback no build)
     SMTP_HOST  = 'smtp.mailtrap.io'
     SMTP_PORT  = '2525'
+    REPO_SLUG  = 'C14-2025/API-BolaMarcada'  // dono/repositorio no GitHub
 
     // ===== Credentials (um por variável) =====
     POSTGRES_SERVER = credentials('postgres-server')         // Secret text: db
@@ -156,7 +157,7 @@ try {
       }
     }
 
-    // ====== AQUI vem o paralelo exigido (Empacotamento + Notificação) ======
+    // ====== Paralelo exigido (Empacotamento + Notificação) ======
     stage('Paralelo: Empacotamento + Notificação') {
       parallel {
         stage('Empacotamento (Docker)') {
@@ -236,6 +237,98 @@ $args = @(
                   '''
                 }
               }
+            }
+          }
+        }
+      }
+    }
+
+    // ===== NOVO: Publicar artefatos no GitHub (Release + GHCR) =====
+    stage('Publicar artefatos no GitHub') {
+      steps {
+        script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
+
+        // 1) Release com junit.xml + build-info.txt
+        withCredentials([string(credentialsId: 'github-pat', variable: 'GITHUB_TOKEN')]) {
+          script {
+            if (isUnix()) {
+              sh '''
+                set -e
+                TAG="build-${BUILD_NUMBER}-${GIT_SHORT}"
+                echo "status=${CI_STATUS}"                  >  build-info.txt
+                echo "image=${IMAGE_NAME}:${IMAGE_TAG}"     >> build-info.txt
+                echo "repo=${REPO_SLUG}"                    >> build-info.txt
+                echo "commit=${GIT_SHORT}"                  >> build-info.txt
+                echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}" >> build-info.txt
+
+                docker run --rm -v "$PWD:/work" -w /work -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+                  release create "$TAG" reports/junit.xml build-info.txt \
+                  --repo "${REPO_SLUG}" \
+                  --title "Build ${BUILD_NUMBER} (${GIT_SHORT})" \
+                  --notes "Artefatos do Jenkins. Imagem Docker enviada para GHCR como ghcr.io/${REPO_SLUG%%/*}/ci-api:${IMAGE_TAG}" \
+                || docker run --rm -v "$PWD:/work" -w /work -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+                  release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
+              '''
+            } else {
+              powershell '''
+$ErrorActionPreference = "Stop"
+$TAG = "build-$($Env:BUILD_NUMBER)-$($Env:GIT_SHORT)"
+$lines = @(
+  "status=$($Env:CI_STATUS)",
+  "image=$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)",
+  "repo=$($Env:REPO_SLUG)",
+  "commit=$($Env:GIT_SHORT)",
+  "run=$($Env:BUILD_URL)"
+)
+[IO.File]::WriteAllLines((Join-Path $Env:WORKSPACE 'build-info.txt'), $lines)
+
+$volume = "$($Env:WORKSPACE):/work"
+$createArgs = @(
+  'run','--rm','-v', $volume,'-w','/work',
+  '-e', "GH_TOKEN=$($Env:GITHUB_TOKEN)",
+  'ghcr.io/cli/cli:latest','release','create', $TAG,
+  'reports/junit.xml','build-info.txt',
+  '--repo', $Env:REPO_SLUG,
+  '--title', "Build $($Env:BUILD_NUMBER) ($($Env:GIT_SHORT))",
+  '--notes', "Artefatos do Jenkins. Imagem Docker enviada para GHCR como ghcr.io/$($Env:REPO_SLUG.Split('/')[0])/ci-api:$($Env:IMAGE_TAG)"
+)
+$null = & docker @createArgs
+if ($LASTEXITCODE -ne 0) {
+  $uploadArgs = @(
+    'run','--rm','-v', $volume,'-w','/work',
+    '-e', "GH_TOKEN=$($Env:GITHUB_TOKEN)",
+    'ghcr.io/cli/cli:latest','release','upload', $TAG,
+    'reports/junit.xml','build-info.txt',
+    '--repo', $Env:REPO_SLUG,'--clobber'
+  )
+  $null = & docker @uploadArgs
+}
+              '''
+            }
+          }
+        }
+
+        // 2) Push da imagem para GHCR (Packages)
+        withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
+          script {
+            if (isUnix()) {
+              sh '''
+                set -e
+                OWNER="${REPO_SLUG%%/*}"
+                echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+                TARGET="ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}"
+                docker tag ${IMAGE_NAME}:${IMAGE_TAG} "$TARGET"
+                docker push "$TARGET"
+              '''
+            } else {
+              powershell '''
+$ErrorActionPreference = "Stop"
+$OWNER = $Env:REPO_SLUG.Split('/')[0]
+$TARGET = "ghcr.io/$OWNER/ci-api:$($Env:IMAGE_TAG)"
+$Env:GHCR_TOKEN | docker login ghcr.io -u $Env:GHCR_USER --password-stdin
+docker tag "$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)" $TARGET
+docker push $TARGET
+              '''
             }
           }
         }
