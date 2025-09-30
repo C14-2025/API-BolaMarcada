@@ -109,8 +109,8 @@ class Review(Base):
     comment = Column("comment", String)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    def __init__(self, field_id, user_id, rating, comment=None):
-        self.field_id = field_id
+    def __init__(self, sports_center_id, user_id, rating, comment=None):
+        self.sports_center_id = sports_center_id
         self.user_id = user_id
         self.rating = rating
         self.comment = comment
