@@ -247,7 +247,6 @@ $args = @(
       steps {
         script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
 
-        // 1) Release (Linux usa gh cli em container autenticado no GHCR)
         withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
           script {
             if (isUnix()) {
@@ -264,10 +263,8 @@ OWNER="${REPO_SLUG%%/*}"
   echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
 } > build-info.txt
 
-# login no GHCR para puxar ghcr.io/cli/cli
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
 
-# cria release (ou só faz upload se já existir)
 docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
   release create "$TAG" reports/junit.xml build-info.txt \
   --repo "${REPO_SLUG}" \
@@ -276,13 +273,12 @@ docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:l
 || docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
   release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
 
-# envia artifacts/*.tar se existir
 docker run --rm -v "$PWD:/w" -w /w \
   -e GH_TOKEN="$GITHUB_TOKEN" -e TAG="$TAG" -e REPO_SLUG="$REPO_SLUG" \
   ghcr.io/cli/cli:latest sh -lc 'set -- artifacts/*.tar; if [ -e "$1" ]; then gh release upload "$TAG" "$@" --repo "$REPO_SLUG" --clobber; fi'
 '''
             } else {
-              // Windows: usa REST API (robusto) — CORRIGIDO AQUI
+              // WINDOWS: sem regex para evitar \ dentro do Groovy
               powershell '''
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -324,13 +320,13 @@ try {
   } else { throw }
 }
 
-# calcula URL de upload de forma resiliente
+# Upload URL sem regex
 $uploadBase = $null
 if ($res.upload_url) {
-  $uploadBase = ($res.upload_url -split '\{')[0]
+  $uploadBase = $res.upload_url.Split('{')[0]
 } elseif ($res.assets_url) {
-  # troca host api.github.com -> uploads.github.com
-  $uploadBase = ($res.assets_url -replace '^https://api\.github\.com','https://uploads.github.com')
+  # troca host api.github.com -> uploads.github.com sem regex
+  $uploadBase = $res.assets_url.Replace('https://api.github.com','https://uploads.github.com')
 } else {
   throw "GitHub release response sem upload_url/assets_url: $( $res | ConvertTo-Json -Depth 5 )"
 }
@@ -364,7 +360,6 @@ foreach ($f in $files) {
           }
         }
 
-        // 2) Push da imagem para GHCR (Packages)
         withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
           script {
             if (isUnix()) {
