@@ -25,7 +25,7 @@ from models.models import (
     Field,
     Availability,
     Booking,
-)  # noqa: F401  (garante que Base.metadata esteja preenchido)
+)
 
 # === Alembic config ===
 config = context.config

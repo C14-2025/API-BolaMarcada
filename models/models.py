@@ -68,7 +68,7 @@ class SportsCenter(Base):
 
     # Campos
     name = Column("name", String, nullable=False)
-    cnpj = Column("cnpj", String, nullable=False)
+    cnpj = Column("cnpj", String, unique=True, nullable=False)
     latitude = Column("latitude", Numeric(9, 6), nullable=False)
     longitude = Column("longitude", Numeric(9, 6), nullable=False)
     photo_path = Column("photo_path", String)
@@ -99,7 +99,9 @@ class Review(Base):
 
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
-    field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
+    sports_center_id = Column(
+        "sports_center_id", Integer, ForeignKey("sports_centers.id"), nullable=False
+    )
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # Campos
@@ -123,6 +125,11 @@ class Field(Base):
     sports_center_id = Column(
         "sports_center_id", Integer, ForeignKey("sports_centers.id"), nullable=False
     )
+
+    # user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    # id = Column(
+    #     GUID(), ForeignKey("users.id"), default=uuid.uuid4, unique=True, nullable=False
+    # )
 
     # Campos
     name = Column("name", String, nullable=False)
@@ -190,3 +197,18 @@ class Booking(Base):
         self.day_of_week = day_of_week
         self.start_time = start_time
         self.status = status
+
+
+# alembic init alembic
+# alterar env.py
+# alterar alembic.ini
+# alembic revision --autogenerate -m "Initial Migration"
+# alembic upgrade head
+
+# se deu erro
+# deletar version e .db
+# executa novamente alembic revision --autogenerate -m "Initial Migration"
+
+# sempre quando houver alteraçao do banco, é necessario migrar:
+# alembic revision --autogenerate -m "remove admin"
+# alembic upgrade head
