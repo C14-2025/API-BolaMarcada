@@ -3,9 +3,9 @@ name: Upload Python Package
 on:
   workflow_dispatch:
   push:
-    branches: [main, master, FEAT-implementing-GitHubActions]
+    branches: ["**"]
   pull_request:
-    branches: [main, master, FEAT-implementing-GitHubActions]
+    branches: ["**"]
 
 jobs:
   release-build:
@@ -56,4 +56,4 @@ jobs:
         run: sudo apt-get install mailutils
 
       - name: Send email notification
-        run: echo "Pipeline realizado com sucesso" | mail -s "Pipeline Notification" thomasvictor2909@gmail.com
+        run: echo "Pipeline realizado com sucesso" | mail -s "Pipeline Notification" ${{ secrets.NOTIFICATION_EMAIL }}
