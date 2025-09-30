@@ -115,8 +115,8 @@ services:
 
               $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml up -d db
 
-              # (opcional) normaliza finais de linha do script
-              $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash -lc 'sed -i "s/\\r$//" scripts/run_tests.sh; bash scripts/run_tests.sh'
+              # Normaliza CRLF sem editar in-place (evita erro no Windows)
+              $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash -lc 'tr -d "\\r" < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh'
             '''
           } else {
             powershell '''
@@ -140,8 +140,8 @@ $ci  = Join-Path $Env:WORKSPACE 'docker-compose.ci.yml'
 
 Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" up -d db"
 try {
-  # (opcional) normaliza CRLF antes de executar
-  Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" run --rm api bash -lc 'sed -i ""s/\r$//"" scripts/run_tests.sh; bash scripts/run_tests.sh'"
+  # Normaliza CRLF sem in-place
+  Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" run --rm api bash -lc 'tr -d \"\\r\" < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh'"
 } finally {
   try { Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" down -v" } catch { Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)" }
 }
@@ -243,47 +243,48 @@ $args = @(
       }
     }
 
-    // ===== NOVO: Publicar artefatos no GitHub (Release + GHCR) =====
+    // ===== Publicar artefatos no GitHub (Release + GHCR) =====
     stage('Publicar artefatos no GitHub') {
-  steps {
-    script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
+      steps {
+        script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
 
-    // 1) Release com junit.xml + build-info.txt (+ artifacts/*.tar se existir)
-    withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-      script {
-        if (isUnix()) {
-          sh '''
-            set -e
-            TAG="build-${BUILD_NUMBER}-${GIT_SHORT}"
-            OWNER="${REPO_SLUG%%/*}"
+        // 1) Release com junit.xml + build-info.txt (+ artifacts/*.tar se existir)
+        withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+          script {
+            if (isUnix()) {
+              sh '''
+                set -e
+                TAG="build-${BUILD_NUMBER}-${GIT_SHORT}"
+                OWNER="${REPO_SLUG%%/*}"
 
-            {
-              echo "status=${CI_STATUS}"
-              echo "image=${IMAGE_NAME}:${IMAGE_TAG}"
-              echo "repo=${REPO_SLUG}"
-              echo "commit=${GIT_SHORT}"
-              echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
-            } > build-info.txt
+                {
+                  echo "status=${CI_STATUS}"
+                  echo "image=${IMAGE_NAME}:${IMAGE_TAG}"
+                  echo "repo=${REPO_SLUG}"
+                  echo "commit=${GIT_SHORT}"
+                  echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
+                } > build-info.txt
 
-            # login no GHCR para conseguir puxar ghcr.io/cli/cli
-            echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
+                # login no GHCR para conseguir puxar ghcr.io/cli/cli
+                echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
 
-            # cria release (ou faz upload se já existir)
-            docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-              release create "$TAG" reports/junit.xml build-info.txt \
-              --repo "${REPO_SLUG}" \
-              --title "Build ${BUILD_NUMBER} (${GIT_SHORT})" \
-              --notes "Artefatos do Jenkins. Imagem Docker: ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}" \
-            || docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-              release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
+                # cria release (ou faz upload se já existir)
+                docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+                  release create "$TAG" reports/junit.xml build-info.txt \
+                  --repo "${REPO_SLUG}" \
+                  --title "Build ${BUILD_NUMBER} (${GIT_SHORT})" \
+                  --notes "Artefatos do Jenkins. Imagem Docker: ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}" \
+                || docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+                  release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
 
-            # envia também quaisquer tar gerados em artifacts/
-            docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-              bash -lc 'shopt -s nullglob; files=(artifacts/*.tar); if [ ${#files[@]} -gt 0 ]; then gh release upload "'"$TAG"'" "${files[@]}" --repo "'"${REPO_SLUG}"'" --clobber; fi'
-          '''
-        } else {
-          // PowerShell: usa API do GitHub (sem depender de GHCR)
-          powershell '''
+                # envia também quaisquer tar gerados em artifacts/ (shell POSIX)
+                docker run --rm -v "$PWD:/w" -w /w \
+                  -e GH_TOKEN="$GITHUB_TOKEN" -e TAG="$TAG" -e REPO_SLUG="$REPO_SLUG" \
+                  ghcr.io/cli/cli:latest sh -lc 'set -- artifacts/*.tar; if [ -e "$1" ]; then gh release upload "$TAG" "$@" --repo "$REPO_SLUG" --clobber; fi'
+              '''
+            } else {
+              // PowerShell: usa API do GitHub (sem depender de GHCR)
+              powershell '''
 $ErrorActionPreference = "Stop"
 
 $TAG = "build-$($Env:BUILD_NUMBER)-$($Env:GIT_SHORT)"
@@ -321,7 +322,7 @@ try {
     $res = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases/tags/$TAG" -Headers $Headers
   } else { throw }
 }
-$uploadUrl = $res.upload_url -replace '\{.*$',''
+$uploadUrl = $res.upload_url -replace '\{.*$',''  # já vem com uploads.github.com
 
 # arquivos para enviar
 $files = @("reports/junit.xml","build-info.txt")
@@ -336,38 +337,38 @@ foreach ($f in $files) {
       -InFile $f | Out-Null
   }
 }
-          '''
+              '''
+            }
+          }
         }
-      }
-    }
 
-    // 2) Push da imagem para GHCR (Packages)
-    withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
-      script {
-        if (isUnix()) {
-          sh '''
-            set -e
-            OWNER="${REPO_SLUG%%/*}"
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            TARGET="ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}"
-            docker tag ${IMAGE_NAME}:${IMAGE_TAG} "$TARGET"
-            docker push "$TARGET"
-          '''
-        } else {
-          powershell '''
+        // 2) Push da imagem para GHCR (Packages)
+        withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
+          script {
+            if (isUnix()) {
+              sh '''
+                set -e
+                OWNER="${REPO_SLUG%%/*}"
+                echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+                TARGET="ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}"
+                docker tag ${IMAGE_NAME}:${IMAGE_TAG} "$TARGET"
+                docker push "$TARGET"
+              '''
+            } else {
+              powershell '''
 $ErrorActionPreference = "Stop"
 $OWNER = $Env:REPO_SLUG.Split('/')[0]
 $TARGET = "ghcr.io/$OWNER/ci-api:$($Env:IMAGE_TAG)"
 $Env:GHCR_TOKEN | docker login ghcr.io -u $Env:GHCR_USER --password-stdin
 docker tag "$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)" $TARGET
 docker push $TARGET
-          '''
+              '''
+            }
+          }
         }
       }
     }
   }
-}
-
 
   post {
     always {
