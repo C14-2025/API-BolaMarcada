@@ -1,13 +1,21 @@
 from fastapi import APIRouter, HTTPException
-from schemas.sports_center_schemas import SportsCenterCreate, SportsCenterResponse
+from models.models import User
+from schemas.sports_center_schemas import (
+    SportsCenterCreate,
+    SportsCenterResponse,
+    SportsCenterUpdate,
+)
 from sqlalchemy.orm import Session
 from core.database import get_db
 from fastapi import Depends
 from services.sports_center_service import (
     create_sports_center_service,
-    get_sports_center_by_id,
+    get_all_sports_centers_by_user_id_service,
+    get_sports_center_by_id_service,
     delete_sports_center_by_id,
+    update_sports_center_service,
 )
+from utils.security import get_current_user
 
 sports_center_router = APIRouter(prefix="/sports_center", tags=["sports_center"])
 
@@ -16,22 +24,29 @@ sports_center_router = APIRouter(prefix="/sports_center", tags=["sports_center"]
 async def create_sports_center(
     sports_center_create: SportsCenterCreate,
     session: Session = Depends(get_db),
+    # current_user: User = Depends(get_current_user),
 ):
     try:
         new_id = create_sports_center_service(session, sports_center_create)
-        return {"message": "Centro esportivo criado com sucesso.","id": new_id}
+        return {"message": "Centro esportivo criado com sucesso.", "id": new_id}
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=400, detail=f"Erro ao criar centro esportivo: {str(e)}")
+        raise HTTPException(
+            status_code=400, detail=f"Erro ao criar centro esportivo: {str(e)}"
+        )
 
 
-@sports_center_router.get("/{sports_center_id}", response_model=SportsCenterResponse)
-async def get_sports_center(sports_center_id: int, session: Session = Depends(get_db)):
+@sports_center_router.get("/{sports_center_id}")
+async def get_sports_center(
+    sports_center_id: int,
+    session: Session = Depends(get_db),
+    # current_user: User = Depends(get_current_user),
+):
 
     # Busca o centro esportivo pelo ID
-    sports_center = get_sports_center_by_id(session, sports_center_id)
+    sports_center = get_sports_center_by_id_service(session, sports_center_id)
 
     # Se não existir, retorna erro 404
     if not sports_center:
@@ -41,8 +56,52 @@ async def get_sports_center(sports_center_id: int, session: Session = Depends(ge
     return sports_center
 
 
+@sports_center_router.get("/all/{user_id}")
+async def get_sports_centers_by_user_id(
+    owner_id: int,
+    session: Session = Depends(get_db),
+    # current_user: User = Depends(get_current_user),
+):
+    # Busca todos os centros esportivos do dono
+    sports_centers = get_all_sports_centers_by_user_id_service(session, owner_id)
+
+    # Se não existir nenhum, retorna erro 404
+    if not sports_centers:
+        raise HTTPException(
+            status_code=404, detail="Nenhum centro esportivo encontrado para este dono."
+        )
+
+    # Retorna os dados dos centros esportivos
+    return sports_centers
+
+
+@sports_center_router.patch("/update/{sports_center_id}")
+async def update_sports_center(
+    sports_center_id: int,
+    sports_center_update: SportsCenterUpdate,
+    session: Session = Depends(get_db),
+    # current_user: User = Depends(get_current_user),
+):
+    try:
+        updated = update_sports_center_service(
+            session, sports_center_id, sports_center_update
+        )
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=400, detail=f"Erro ao atualizar centro esportivo: {str(e)}"
+        )
+
+
 @sports_center_router.delete("/{sports_center_id}")
-async def delete_sports_center(sports_center_id: int, session: Session = Depends(get_db)):
+async def delete_sports_center(
+    sports_center_id: int,
+    session: Session = Depends(get_db),
+    # current_user: User = Depends(get_current_user),
+):
     try:
         # Chama o método que tenta deletar o centro esportivo
         delete_sports_center_by_id(session, sports_center_id)
@@ -51,4 +110,6 @@ async def delete_sports_center(sports_center_id: int, session: Session = Depends
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=400, detail=f"Erro ao deletar centro esportivo: {str(e)}")
+        raise HTTPException(
+            status_code=400, detail=f"Erro ao deletar centro esportivo: {str(e)}"
+        )
