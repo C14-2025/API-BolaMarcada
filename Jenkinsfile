@@ -13,6 +13,13 @@ pipeline {
     IMAGE_TAG  = ''                 // setado no Checkout (fallback no build)
     SMTP_HOST  = 'smtp.mailtrap.io'
     SMTP_PORT  = '2525'
+
+    // ===== Credentials (um por variável) =====
+    POSTGRES_SERVER = credentials('postgres-server')         // Secret text: db
+    POSTGRES_DB     = credentials('postgres-dbname')         // Secret text: bolamarcadadb
+    SECRET_KEY      = credentials('app-secret-key')          // Secret text
+    ACCESS_TOKEN_EXPIRE_MINUTES = credentials('access-token-expire') // Secret text
+    DB = credentials('pg-db') // Username+Password -> cria DB_USR e DB_PSW
   }
 
   stages {
@@ -31,65 +38,54 @@ $git
 ''', returnStdout: true).trim()
           }
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_SHORT}"
-          echo "[ci] IMAGE_TAG=${env.IMAGE_TAG}"
+          echo "[ci] IMAGE_TAG=${env.IMAGE_TAG ?: 'null'}"
         }
       }
     }
 
-    stage('Preparar .env') {
+    stage('Compose override (CI)') {
       steps {
         script {
           if (isUnix()) {
-            withCredentials([string(credentialsId: 'app-env', variable: 'APP_ENV')]) {
-              sh '''
-                set -e
-                printf "%s\\n" "$APP_ENV" | tr -d '\\r' > .env
-                echo "[ci] .env criado a partir do credential 'app-env'"
-
-                # override pra NÃO publicar porta do Postgres no host (evita conflito da 5433)
-                cat > docker-compose.override.yml <<'YAML'
+            sh '''
+              # Arquivo override que:
+              # 1) remove ports do db (evita conflito)
+              # 2) remove env_file do api e injeta envs do Jenkins
+              cat > docker-compose.ci.yml <<'YAML'
 services:
   db:
     ports: []
+  api:
+    env_file: []
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+      POSTGRES_SERVER: ${POSTGRES_SERVER}
+      POSTGRES_HOST: ${POSTGRES_SERVER}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
 YAML
-
-                # exporta pro shell atual se algo precisar direto
-                set -a
-                . ./.env
-                set +a
-              '''
-            }
+            '''
           } else {
-            withCredentials([string(credentialsId: 'app-env', variable: 'APP_ENV')]) {
-              powershell '''
-$ErrorActionPreference = "Stop"
-$dest = Join-Path $Env:WORKSPACE ".env"
-[System.IO.File]::WriteAllText($dest, $Env:APP_ENV)
-Write-Host "[ci] .env criado a partir do credential 'app-env'"
-
-# override pra remover publicação de portas do serviço db
+            powershell '''
 $override = @"
 services:
   db:
     ports: []
+  api:
+    env_file: []
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+      POSTGRES_SERVER: ${POSTGRES_SERVER}
+      POSTGRES_HOST: ${POSTGRES_SERVER}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
 "@
-[System.IO.File]::WriteAllText((Join-Path $Env:WORKSPACE "docker-compose.override.yml"), $override)
-
-# exporta variáveis deste .env pro processo atual (se algum passo usar direto)
-Get-Content $dest | ForEach-Object {
-  if ($_ -eq $null) { return }
-  $line = $_.ToString()
-  $trim = $line.Trim()
-  if ($trim.Length -eq 0) { return }       # em branco
-  if ($trim.StartsWith('#')) { return }    # comentário
-  $kv = $line.Split('=', 2)
-  if ($kv.Count -ne 2) { return }
-  $k = $kv[0].Trim()
-  $v = $kv[1]
-  [System.Environment]::SetEnvironmentVariable($k, $v, 'Process')
-}
-              '''
-            }
+[System.IO.File]::WriteAllText((Join-Path $Env:WORKSPACE "docker-compose.ci.yml"), $override)
+            '''
           }
         }
       }
@@ -104,18 +100,21 @@ Get-Content $dest | ForEach-Object {
               mkdir -p reports artifacts
               export COMPOSE_PROJECT_NAME="fastapi-ci-${BUILD_NUMBER}"
 
+              # Mapear DB_USR/DB_PSW para nomes esperados pelo compose/app
+              export POSTGRES_USER="$DB_USR"
+              export POSTGRES_PASSWORD="$DB_PSW"
+
               compose_cmd="docker compose"
               if ! docker compose version >/dev/null 2>&1; then
                 if command -v docker-compose >/dev/null 2>&1; then compose_cmd="docker-compose"; fi
               fi
               echo "Usando: $compose_cmd"
 
-              cleanup() { $compose_cmd -f docker-compose.yml -f docker-compose.override.yml down -v || true; }
+              cleanup() { $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml down -v || true; }
               trap cleanup EXIT
 
-              # carrega .env explicitamente e usa override pra não publicar portas
-              $compose_cmd --env-file .env -f docker-compose.yml -f docker-compose.override.yml up -d db
-              $compose_cmd --env-file .env -f docker-compose.yml -f docker-compose.override.yml run --rm api bash scripts/run_tests.sh
+              $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml up -d db
+              $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash scripts/run_tests.sh
             '''
           } else {
             powershell '''
@@ -124,18 +123,28 @@ New-Item -ItemType Directory -Force -Path "reports" | Out-Null
 New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
 $Env:COMPOSE_PROJECT_NAME = "fastapi-ci-$Env:BUILD_NUMBER"
 
+# Mapeia DB_USR/DB_PSW -> nomes esperados
+$Env:POSTGRES_USER     = $Env:DB_USR
+$Env:POSTGRES_PASSWORD = $Env:DB_PSW
+
+# (failsafe) se existir algum container publicando 5433, para
+$ids = docker ps --format "{{.ID}} {{.Ports}}" | Select-String ":5433->" | ForEach-Object { ($_.ToString() -split '\s+')[0] }
+if ($ids) { $ids | ForEach-Object { Write-Host "[ci] Parando container que usa 5433: $_"; docker stop $_ | Out-Null } }
+
 $composeCmd = 'docker compose'
 try { docker compose version | Out-Null } catch {
   if (Get-Command docker-compose -ErrorAction SilentlyContinue) { $composeCmd = 'docker-compose' }
 }
 Write-Host "Usando: $composeCmd"
 
-# usa .env explicitamente e override sem portas
-Invoke-Expression "$composeCmd --env-file .env -f docker-compose.yml -f docker-compose.override.yml up -d db"
+$dc  = Join-Path $Env:WORKSPACE 'docker-compose.yml'
+$ci  = Join-Path $Env:WORKSPACE 'docker-compose.ci.yml'
+
+Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" up -d db"
 try {
-  Invoke-Expression "$composeCmd --env-file .env -f docker-compose.yml -f docker-compose.override.yml run --rm api bash scripts/run_tests.sh"
+  Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" run --rm api bash scripts/run_tests.sh"
 } finally {
-  try { Invoke-Expression "$composeCmd -f docker-compose.yml -f docker-compose.override.yml down -v" } catch { Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)" }
+  try { Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" down -v" } catch { Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)" }
 }
 '''
           }
@@ -207,9 +216,8 @@ $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteS
 $BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
 $RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
 
-# usa WORKSPACE para montar o volume corretamente no Windows
-$workspace = $Env:WORKSPACE
-$volume = "$workspace:/app"
+# monta volume no Windows com expansão segura (evita erro do ':')
+$volume = "$($Env:WORKSPACE):/app"
 docker run --rm -v "$volume" -w /app `
   -e SMTP_HOST="$Env:SMTP_HOST" -e SMTP_PORT="$Env:SMTP_PORT" `
   -e SMTP_USER="$Env:SMTP_USER" -e SMTP_PASS="$Env:SMTP_PASS" -e EMAIL_TO="$Env:EMAIL_TO" `
