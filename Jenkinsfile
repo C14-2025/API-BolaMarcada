@@ -1,5 +1,6 @@
-// Jenkinsfile completo — docker-compose tests + fallback docker cp + build + notify (Mailtrap)
+// Jenkinsfile (Scripted) — docker-compose tests + robust docker cp + build + notify (Mailtrap)
 node {
+  // ajuste se necessário
   def WIN_PY = 'C:\\\\Users\\\\jmxd\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'
   def SMTP_HOST = 'sandbox.smtp.mailtrap.io'
   def SMTP_PORT = '2525'
@@ -11,8 +12,18 @@ node {
       echo "Checkout realizado."
     }
 
-    stage('Tests (docker-compose + fallback)') {
-      echo "Usando secret file (.env) e docker-compose para rodar migrations + testes (com fallback docker cp)..."
+    stage('Prepare workspace') {
+      // garante diretório reports no workspace
+      if (isUnix()) {
+        sh 'mkdir -p reports logs || true'
+      } else {
+        bat 'if not exist reports mkdir reports'
+        bat 'if not exist logs mkdir logs'
+      }
+    }
+
+    stage('Tests (docker-compose + reliable docker cp)') {
+      echo "Usando secret file (.env) e docker-compose para rodar migrations + testes (copy fallback)..."
       withCredentials([file(credentialsId: 'env-file', variable: 'ENV_FILE')]) {
         if (isUnix()) {
           sh '''
@@ -20,53 +31,36 @@ node {
             cp "$ENV_FILE" .env
             mkdir -p reports logs
 
-            # cleanup
-            docker rm -f postgres_bolamarcada || true
-            docker rm -f jenkins_api_test || true
-
+            # cleanup gentle
+            docker rm -f jenkins_api_test 2>/dev/null || true
             docker-compose down --remove-orphans || true
             docker-compose pull || true
+
+            # sobe apenas DB
             docker-compose up -d db
-            sleep 15
+            echo "esperando DB inicializar..."
+            sleep 8
 
-            # tentativa normal (sem TTY)
-            echo "[normal run] docker-compose run --rm -T api pytest -> logs/pytest.out"
-            docker-compose run --rm -T api sh -c "alembic upgrade head || true; python -m pytest -q --junitxml=/app/reports/junit.xml" > logs/pytest.out 2>&1 || true
+            # build imagem (opcional); nome consistente
+            docker build -t api-bolamarcada:jenkins . > logs/build_image.log 2>&1 || true
 
-            echo "=> Verificando se reports/junit.xml existe no HOST"
-            if [ -f reports/junit.xml ]; then
-              echo "FOUND: reports/junit.xml"
-            else
-              echo "NOT FOUND: reports/junit.xml -> iniciando FALLBACK (build+docker create/start+docker cp)"
-              # build image explicitly
-              docker build -t api-bolamarcada:jenkins . > logs/build_image.log 2>&1 || true
+            # roda testes via docker-compose RUN mas sem --rm para podermos copiar artefatos
+            docker-compose run --no-deps --name jenkins_api_test api sh -c "python -m pytest -q --junitxml=/app/reports/junit.xml" || true
 
-              # create and run a container named jenkins_api_test with host bind to workspace
-              CID=$(docker create --name jenkins_api_test -v "$(pwd)":/app -w /app api-bolamarcada:jenkins sh -c "alembic upgrade head || true; python -m pytest -q --junitxml=/app/reports/junit.xml") || CID=""
-              echo "Created container: ${CID}"
-              if [ -n "${CID}" ]; then
-                docker start -a "${CID}" > logs/pytest_fallback.out 2>&1 || true
-                echo "Attempt docker cp from container to host (reports)..."
-                docker cp "${CID}":/app/reports ./reports 2>/dev/null || echo "docker cp failed (attempting to inspect container files)"
-                echo "Container logs (tail 200):"
-                docker logs "${CID}" --tail 200 || true
-                docker rm -f "${CID}" || true
-              else
-                echo "Failed to create fallback container."
-              fi
-            fi
+            # traz o relatório do container para o host workspace
+            echo "tentando docker cp jenkins_api_test:/app/reports -> ./reports"
+            docker cp jenkins_api_test:/app/reports ./reports 2>/dev/null || true
 
-            echo "=== Listing host workspace and reports ==="
-            ls -la .
-            ls -la reports || true
+            # salva logs do container
+            docker logs jenkins_api_test --tail 500 > logs/pytest_fallback.out 2>&1 || true
 
-            echo "=== HEAD of logs/pytest.out ==="
-            head -n 200 logs/pytest.out || true
-            echo "=== HEAD of logs/pytest_fallback.out ==="
-            head -n 200 logs/pytest_fallback.out || true
-
+            # cleanup
+            docker rm -f jenkins_api_test 2>/dev/null || true
             docker-compose down || true
           '''
+          // Agora o junit step tenta ler o arquivo do workspace
+          junit 'reports/junit.xml'
+          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
         } else {
           bat """
             @echo off
@@ -74,77 +68,64 @@ node {
             if not exist reports mkdir reports
             if not exist logs mkdir logs
 
-            docker rm -f postgres_bolamarcada 2>nul || echo no_container
+            rem cleanup
             docker rm -f jenkins_api_test 2>nul || echo no_container
 
             docker-compose down --remove-orphans || exit /b 0
             docker-compose pull || exit /b 0
             docker-compose up -d db
-            timeout /t 15 /nobreak >nul
+            echo esperando DB inicializar...
+            timeout /t 8 /nobreak >nul
 
-            echo [normal run] docker-compose run --rm -T api pytest -> logs\\pytest.out
-            docker-compose run --rm -T api sh -c "alembic upgrade head || true; python -m pytest -q --junitxml=/app/reports/junit.xml" > logs\\pytest.out 2>&1 || echo TEST_RUN_FAILED
+            rem build image (log)
+            docker build -t api-bolamarcada:jenkins . > logs\\build_image.log 2>&1 || echo build_failed
 
-            echo Verificando reports\\junit.xml no HOST
-            if exist reports\\junit.xml (
-              echo FOUND: reports\\junit.xml
-            ) else (
-              echo NOT FOUND: reports\\junit.xml -> iniciando FALLBACK (build + create + start + docker cp)
-              docker build -t api-bolamarcada:jenkins . > logs\\build_image.log 2>&1 || echo BUILD_FAILED
-              REM create container (do not --rm so we can docker cp)
-              for /f "delims=" %%I in ('docker create --name jenkins_api_test -v "%cd%":/app -w /app api-bolamarcada:jenkins sh -c "alembic upgrade head || true; python -m pytest -q --junitxml=/app/reports/junit.xml"') do set CID=%%I
-              echo Created container %CID%
-              if not "%CID%"=="" (
-                docker start -a %CID% > logs\\pytest_fallback.out 2>&1 || echo START_FAILED
-                echo Tentando docker cp...
-                docker cp %CID%:/app/reports ./reports 2>nul || echo DOCKER_CP_FAILED
-                docker logs %CID% --tail 200 || echo LOGS_FAILED
-                docker rm -f %CID% || echo RM_FAILED
-              ) else (
-                echo Falha ao criar container de fallback
-              )
-            )
+            rem run tests (image is linux-based; use sh -c). Note: do NOT pass --rm so we can docker cp afterwards
+            docker-compose run --no-deps --name jenkins_api_test api sh -c "python -m pytest -q --junitxml=/app/reports/junit.xml" || echo pytest_failed
 
-            echo ==== dir workspace ====
-            dir /B
-            dir reports || echo NO_REPORTS_DIR
+            rem copy reports from container to workspace
+            echo Tentando docker cp...
+            docker cp jenkins_api_test:/app/reports .\\reports 2>nul || echo DOCKER_CP_FAILED
 
-            echo ==== show logs heads ====
-            more logs\\pytest.out
-            if exist logs\\pytest_fallback.out more logs\\pytest_fallback.out
+            rem save container logs
+            docker logs jenkins_api_test --tail 500 > logs\\pytest_fallback.out 2>&1 || echo LOG_FAIL
 
-            docker-compose down || echo down_failed
+            rem cleanup
+            docker rm -f jenkins_api_test 2>nul || echo no_container
+            docker-compose down || exit /b 0
           """
+          // junit step reads from workspace
+          junit 'reports/junit.xml'
+          archiveArtifacts artifacts: 'reports/**, dist/**', allowEmptyArchive: true
         }
-        // publish junit if exists and archive logs
-        junit 'reports/junit.xml'
-        archiveArtifacts artifacts: 'logs/**, reports/**, dist/**', allowEmptyArchive: true
       } // withCredentials
-    } // stage Tests
+      echo "Stage Tests finalizada."
+    }
 
     stage('Build (package)') {
       echo "Empacotando artefatos..."
       if (isUnix()) {
         sh '''
           if [ -f pyproject.toml ]; then
-            docker-compose run --rm -T api sh -c "python -m pip install --upgrade pip build || true"
-            docker-compose run --rm -T api sh -c "python -m build || true"
+            docker-compose run --rm api sh -c "python -m pip install --upgrade pip build || true"
+            docker-compose run --rm api sh -c "python -m build || true"
           else
-            docker build -t api-bolamarcada:ci .
+            docker build -t api-bolamarcada:ci . > logs/build_package.log 2>&1 || true
           fi
         '''
       } else {
         bat """
           @echo off
           if exist pyproject.toml (
-            docker-compose run --rm -T api sh -c "python -m pip install --upgrade pip build" || exit /b 0
-            docker-compose run --rm -T api sh -c "python -m build" || exit /b 0
+            docker-compose run --rm api sh -c "python -m pip install --upgrade pip build" || echo build_fail
+            docker-compose run --rm api sh -c "python -m build" || echo build_fail
           ) else (
-            docker build -t api-bolamarcada:ci .
+            docker build -t api-bolamarcada:ci . > logs\\build_package.log 2>&1 || echo build_fail
           )
         """
       }
       archiveArtifacts artifacts: 'dist/**', allowEmptyArchive: true
+      echo "Stage Build finalizada."
     }
 
   } catch (err) {
@@ -153,6 +134,7 @@ node {
     echo "Pipeline falhou: ${err}"
     throw err
   } finally {
+    // Notify (sempre)
     echo "Enviando notificação de fim de pipeline (status: ${buildStatus})..."
     try {
       withCredentials([
@@ -185,9 +167,13 @@ node {
       echo "Falha ao enviar notificação: ${notifErr}"
     }
 
+    // cleanup .env
     try {
-      if (isUnix()) { sh 'if [ -f .env ]; then rm -f .env; fi || true' }
-      else { bat 'if exist .env del /Q .env' }
+      if (isUnix()) {
+        sh 'if [ -f .env ]; then rm -f .env; fi || true'
+      } else {
+        bat 'if exist .env del /Q .env'
+      }
     } catch (cleanupErr) {
       echo "Aviso: falha ao remover .env: ${cleanupErr}"
     }
