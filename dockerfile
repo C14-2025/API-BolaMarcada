@@ -12,8 +12,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# copia o wait-for-it
+COPY scripts/wait-for-it.sh /wait-for-it.sh
+RUN chmod +x /wait-for-it.sh
+
 EXPOSE 8000
 
-# usa ENTRYPOINT/CMD em forma exec para previsibilidade
-ENTRYPOINT ["sh", "-c"]
-CMD ["alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+# deixa o ENTRYPOINT neutro e só usa CMD
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
