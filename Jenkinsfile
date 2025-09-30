@@ -259,4 +259,4 @@ try { docker system prune -f | Out-Null } catch { Write-Warning "Falha ao limpar
     }
   }
 }
-
+}
