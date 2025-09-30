@@ -48,7 +48,6 @@ $git
         script {
           if (isUnix()) {
             sh '''
-              # Arquivo override que:
               # 1) remove ports do db (evita conflito)
               # 2) remove env_file do api e injeta envs do Jenkins
               cat > docker-compose.ci.yml <<'YAML'
@@ -208,7 +207,8 @@ docker save -o "$archive" "$tag"
               docker run --rm -v "$PWD:/app" -w /app \
                 -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
                 -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
-                python:3.13-slim sh -lc "python scripts/notify.py --status \\"$STATUS\\" --run-id \\"$RUNID\\" --repo \\"$REPO\\" --branch \\"$BRANCH\\""
+                python:3.13-slim python scripts/notify.py \
+                  --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
             '''
           } else {
             powershell '''
@@ -218,12 +218,25 @@ $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteS
 $BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
 $RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
 
-# monta volume no Windows com expansão segura (evita erro do ':')
+# volume com expansão segura
 $volume = "$($Env:WORKSPACE):/app"
-docker run --rm -v "$volume" -w /app `
-  -e SMTP_HOST="$Env:SMTP_HOST" -e SMTP_PORT="$Env:SMTP_PORT" `
-  -e SMTP_USER="$Env:SMTP_USER" -e SMTP_PASS="$Env:SMTP_PASS" -e EMAIL_TO="$Env:EMAIL_TO" `
-  python:3.13-slim sh -lc "python scripts/notify.py --status `"$STATUS`" --run-id `"$RUNID`" --repo `"$REPO`" --branch `"$BRANCH`""
+
+# chama docker run usando ARRAY de argumentos (sem malabarismo de aspas)
+$args = @(
+  'run','--rm','-v', $volume,'-w','/app',
+  '-e', "SMTP_HOST=$($Env:SMTP_HOST)",
+  '-e', "SMTP_PORT=$($Env:SMTP_PORT)",
+  '-e', "SMTP_USER=$($Env:SMTP_USER)",
+  '-e', "SMTP_PASS=$($Env:SMTP_PASS)",
+  '-e', "EMAIL_TO=$($Env:EMAIL_TO)",
+  'python:3.13-slim',
+  'python','scripts/notify.py',
+  '--status', $STATUS,
+  '--run-id', $RUNID,
+  '--repo', $REPO,
+  '--branch', $BRANCH
+)
+& docker @args
 '''
           }
         }
