@@ -245,34 +245,51 @@ $args = @(
 
     // ===== NOVO: Publicar artefatos no GitHub (Release + GHCR) =====
     stage('Publicar artefatos no GitHub') {
-      steps {
-        script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
+  steps {
+    script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
 
-        // 1) Release com junit.xml + build-info.txt
-        withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-          script {
-            if (isUnix()) {
-              sh '''
-                set -e
-                TAG="build-${BUILD_NUMBER}-${GIT_SHORT}"
-                echo "status=${CI_STATUS}"                  >  build-info.txt
-                echo "image=${IMAGE_NAME}:${IMAGE_TAG}"     >> build-info.txt
-                echo "repo=${REPO_SLUG}"                    >> build-info.txt
-                echo "commit=${GIT_SHORT}"                  >> build-info.txt
-                echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}" >> build-info.txt
+    // 1) Release com junit.xml + build-info.txt (+ artifacts/*.tar se existir)
+    withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+      script {
+        if (isUnix()) {
+          sh '''
+            set -e
+            TAG="build-${BUILD_NUMBER}-${GIT_SHORT}"
+            OWNER="${REPO_SLUG%%/*}"
 
-                docker run --rm -v "$PWD:/work" -w /work -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-                  release create "$TAG" reports/junit.xml build-info.txt \
-                  --repo "${REPO_SLUG}" \
-                  --title "Build ${BUILD_NUMBER} (${GIT_SHORT})" \
-                  --notes "Artefatos do Jenkins. Imagem Docker enviada para GHCR como ghcr.io/${REPO_SLUG%%/*}/ci-api:${IMAGE_TAG}" \
-                || docker run --rm -v "$PWD:/work" -w /work -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-                  release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
-              '''
-            } else {
-              powershell '''
+            {
+              echo "status=${CI_STATUS}"
+              echo "image=${IMAGE_NAME}:${IMAGE_TAG}"
+              echo "repo=${REPO_SLUG}"
+              echo "commit=${GIT_SHORT}"
+              echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
+            } > build-info.txt
+
+            # login no GHCR para conseguir puxar ghcr.io/cli/cli
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
+
+            # cria release (ou faz upload se já existir)
+            docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+              release create "$TAG" reports/junit.xml build-info.txt \
+              --repo "${REPO_SLUG}" \
+              --title "Build ${BUILD_NUMBER} (${GIT_SHORT})" \
+              --notes "Artefatos do Jenkins. Imagem Docker: ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}" \
+            || docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+              release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
+
+            # envia também quaisquer tar gerados em artifacts/
+            docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+              bash -lc 'shopt -s nullglob; files=(artifacts/*.tar); if [ ${#files[@]} -gt 0 ]; then gh release upload "'"$TAG"'" "${files[@]}" --repo "'"${REPO_SLUG}"'" --clobber; fi'
+          '''
+        } else {
+          // PowerShell: usa API do GitHub (sem depender de GHCR)
+          powershell '''
 $ErrorActionPreference = "Stop"
+
 $TAG = "build-$($Env:BUILD_NUMBER)-$($Env:GIT_SHORT)"
+$owner = $Env:REPO_SLUG.Split('/')[0]
+
+# build-info.txt
 $lines = @(
   "status=$($Env:CI_STATUS)",
   "image=$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)",
@@ -282,59 +299,75 @@ $lines = @(
 )
 [IO.File]::WriteAllLines((Join-Path $Env:WORKSPACE 'build-info.txt'), $lines)
 
-$volume = "$($Env:WORKSPACE):/work"
-$createArgs = @(
-  'run','--rm','-v', $volume,'-w','/work',
-  '-e', "GH_TOKEN=$($Env:GITHUB_TOKEN)",
-  'ghcr.io/cli/cli:latest','release','create', $TAG,
-  'reports/junit.xml','build-info.txt',
-  '--repo', $Env:REPO_SLUG,
-  '--title', "Build $($Env:BUILD_NUMBER) ($($Env:GIT_SHORT))",
-  '--notes', "Artefatos do Jenkins. Imagem Docker enviada para GHCR como ghcr.io/$($Env:REPO_SLUG.Split('/')[0])/ci-api:$($Env:IMAGE_TAG)"
-)
-$null = & docker @createArgs
-if ($LASTEXITCODE -ne 0) {
-  $uploadArgs = @(
-    'run','--rm','-v', $volume,'-w','/work',
-    '-e', "GH_TOKEN=$($Env:GITHUB_TOKEN)",
-    'ghcr.io/cli/cli:latest','release','upload', $TAG,
-    'reports/junit.xml','build-info.txt',
-    '--repo', $Env:REPO_SLUG,'--clobber'
-  )
-  $null = & docker @uploadArgs
+$Headers = @{
+  Authorization = "Bearer $($Env:GITHUB_TOKEN)"
+  Accept        = "application/vnd.github+json"
+  "User-Agent"  = "jenkins-ci"
 }
-              '''
-            }
-          }
-        }
 
-        // 2) Push da imagem para GHCR (Packages)
-        withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
-          script {
-            if (isUnix()) {
-              sh '''
-                set -e
-                OWNER="${REPO_SLUG%%/*}"
-                echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-                TARGET="ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}"
-                docker tag ${IMAGE_NAME}:${IMAGE_TAG} "$TARGET"
-                docker push "$TARGET"
-              '''
-            } else {
-              powershell '''
+# cria ou obtém release
+$body = @{
+  tag_name   = $TAG
+  name       = "Build $($Env:BUILD_NUMBER) ($($Env:GIT_SHORT))"
+  body       = "Artefatos do Jenkins. Imagem Docker: ghcr.io/$owner/ci-api:$($Env:IMAGE_TAG)"
+  draft      = $false
+  prerelease = $false
+} | ConvertTo-Json
+
+try {
+  $res = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases" -Headers $Headers -Body $body
+} catch {
+  if ($_.Exception.Response.StatusCode.Value__ -eq 422) {
+    $res = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases/tags/$TAG" -Headers $Headers
+  } else { throw }
+}
+$uploadUrl = $res.upload_url -replace '\{.*$',''
+
+# arquivos para enviar
+$files = @("reports/junit.xml","build-info.txt")
+$tarFiles = Get-ChildItem -Path "artifacts" -Filter *.tar -ErrorAction SilentlyContinue
+if ($tarFiles) { $files += $tarFiles.FullName }
+
+foreach ($f in $files) {
+  if (Test-Path $f) {
+    $name = [IO.Path]::GetFileName($f)
+    Invoke-RestMethod -Method Post -Uri "$uploadUrl?name=$name" `
+      -Headers @{ Authorization = $Headers.Authorization; "Content-Type" = "application/octet-stream"; "User-Agent" = "jenkins-ci" } `
+      -InFile $f | Out-Null
+  }
+}
+          '''
+        }
+      }
+    }
+
+    // 2) Push da imagem para GHCR (Packages)
+    withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
+      script {
+        if (isUnix()) {
+          sh '''
+            set -e
+            OWNER="${REPO_SLUG%%/*}"
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            TARGET="ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}"
+            docker tag ${IMAGE_NAME}:${IMAGE_TAG} "$TARGET"
+            docker push "$TARGET"
+          '''
+        } else {
+          powershell '''
 $ErrorActionPreference = "Stop"
 $OWNER = $Env:REPO_SLUG.Split('/')[0]
 $TARGET = "ghcr.io/$OWNER/ci-api:$($Env:IMAGE_TAG)"
 $Env:GHCR_TOKEN | docker login ghcr.io -u $Env:GHCR_USER --password-stdin
 docker tag "$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)" $TARGET
 docker push $TARGET
-              '''
-            }
-          }
+          '''
         }
       }
     }
   }
+}
+
 
   post {
     always {
