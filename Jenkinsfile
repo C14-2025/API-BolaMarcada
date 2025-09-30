@@ -21,7 +21,7 @@ pipeline {
       steps {
         checkout scm
         script {
-          // pega o hash curto do git no Windows
+          // hash curto do git no Windows
           bat '@echo off\r\ngit rev-parse --short HEAD > gitshort.txt 2>nul\r\nif errorlevel 1 (echo local>gitshort.txt)\r\n'
           env.GIT_SHORT = readFile('gitshort.txt').trim()
           env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_SHORT}"
@@ -39,8 +39,8 @@ pipeline {
 
     stage('Testes (pytest)') {
       steps {
-        // cria um script simples para esperar o DB dentro do container
         script {
+          // script simples pra esperar DB (usado dentro do container)
           writeFile file: 'scripts/wait_db.py', text: '''
 import socket, time, sys
 host='db'; port=5432
@@ -57,7 +57,6 @@ else:
         bat """@echo off
 setlocal enabledelayedexpansion
 if not exist reports mkdir reports
-if not exist artifacts mkdir artifacts
 
 REM Detecta docker compose vs docker-compose
 set COMPOSE_CMD=docker compose
@@ -77,11 +76,11 @@ REM Sobe apenas o DB
 !COMPOSE_CMD! up -d db
 if errorlevel 1 exit /b %ERRORLEVEL%
 
-REM Roda o wait + pytest dentro do serviço api
+REM Roda wait + pytest dentro do serviço api (env_file .env + bind .:/app)
 !COMPOSE_CMD! run --rm api sh -lc "python scripts/wait_db.py && mkdir -p reports && pytest --junitxml=reports/junit.xml -q"
 set EXITCODE=%ERRORLEVEL%
 
-REM Derruba containers usados nos testes (e volumes)
+REM Derruba containers usados
 !COMPOSE_CMD! down -v
 
 exit /b %EXITCODE%
@@ -89,24 +88,19 @@ exit /b %EXITCODE%
       }
       post {
         always {
+          // Só publica o JUnit para aparecer no Jenkins (sem salvar artefato)
           junit allowEmptyResults: true, testResults: 'reports/junit.xml'
-          archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
         }
       }
     }
 
-    stage('Build & Package (Docker)') {
+    stage('Build (Docker)') {
       steps {
         bat """@echo off
 docker build -t %IMAGE_NAME%:%IMAGE_TAG% -f Dockerfile .
 if errorlevel 1 exit /b %ERRORLEVEL%
-
 docker image ls %IMAGE_NAME%:%IMAGE_TAG%
-
-if not exist artifacts mkdir artifacts
-docker save -o artifacts\\%IMAGE_NAME%_%IMAGE_TAG%.tar %IMAGE_NAME%:%IMAGE_TAG%
 """
-        archiveArtifacts artifacts: 'artifacts/*.tar', onlyIfSuccessful: true
       }
     }
   }
@@ -131,7 +125,7 @@ docker run --rm -v "%CD%:/app" -w /app ^
 """
         }
       }
-      // limpeza leve; ignora erro se docker não estiver presente
+      // limpeza leve (ignora erro)
       bat 'docker system prune -f >NUL 2>&1 || exit /b 0'
     }
   }
