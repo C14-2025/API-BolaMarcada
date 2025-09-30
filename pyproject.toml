@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "api-bolamarcada"
+version = "0.1.0"
+description = "API do projeto Bola Marcada"
+authors = [
+  { name="Thomas Victor Dias Carvalho", email="thomasvictordias@outlook.com" }
+]
+dependencies = [
+  "fastapi",
+  "uvicorn"
+]
