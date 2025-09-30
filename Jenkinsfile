@@ -158,6 +158,7 @@ finally {
       }
     }
 
+    // ====== Paralelo exigido (Empacotamento + Notificação) ======
     stage('Paralelo: Empacotamento + Notificação') {
       parallel {
         stage('Empacotamento (Docker)') {
@@ -243,10 +244,12 @@ $args = @(
       }
     }
 
+    // ===== NOVO: Publicar artefatos no GitHub (Release + GHCR) =====
     stage('Publicar artefatos no GitHub') {
       steps {
         script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
 
+        // 1) Release com junit.xml + build-info.txt (+ artifacts/*.tar se existir)
         withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
           script {
             if (isUnix()) {
@@ -263,8 +266,10 @@ OWNER="${REPO_SLUG%%/*}"
   echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
 } > build-info.txt
 
+# login no GHCR para conseguir puxar ghcr.io/cli/cli
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
 
+# cria release (ou faz upload se já existir)
 docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
   release create "$TAG" reports/junit.xml build-info.txt \
   --repo "${REPO_SLUG}" \
@@ -273,12 +278,13 @@ docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:l
 || docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
   release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
 
+# envia também quaisquer tar gerados em artifacts/
 docker run --rm -v "$PWD:/w" -w /w \
   -e GH_TOKEN="$GITHUB_TOKEN" -e TAG="$TAG" -e REPO_SLUG="$REPO_SLUG" \
   ghcr.io/cli/cli:latest sh -lc 'set -- artifacts/*.tar; if [ -e "$1" ]; then gh release upload "$TAG" "$@" --repo "$REPO_SLUG" --clobber; fi'
 '''
             } else {
-              // WINDOWS: sem regex para evitar \ dentro do Groovy
+              // PowerShell: sem regex (evita '\{')
               powershell '''
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -325,7 +331,6 @@ $uploadBase = $null
 if ($res.upload_url) {
   $uploadBase = $res.upload_url.Split('{')[0]
 } elseif ($res.assets_url) {
-  # troca host api.github.com -> uploads.github.com sem regex
   $uploadBase = $res.assets_url.Replace('https://api.github.com','https://uploads.github.com')
 } else {
   throw "GitHub release response sem upload_url/assets_url: $( $res | ConvertTo-Json -Depth 5 )"
@@ -360,6 +365,7 @@ foreach ($f in $files) {
           }
         }
 
+        // 2) Push da imagem para GHCR (Packages)
         withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
           script {
             if (isUnix()) {
@@ -389,6 +395,7 @@ docker push $TARGET
 
   post {
     always {
+      // status final disponível para shells
       script { env.CI_STATUS = currentBuild.currentResult ?: 'UNKNOWN' }
 
       withCredentials([
@@ -439,6 +446,7 @@ $args = @(
         }
       }
 
+      // limpeza do docker
       script {
         if (isUnix()) {
           sh 'docker system prune -f || true'
