@@ -99,7 +99,9 @@ class Review(Base):
 
     # Keys
     id = Column("id", Integer, primary_key=True, autoincrement=True)
-    field_id = Column("field_id", Integer, ForeignKey("fields.id"), nullable=False)
+    sports_center_id = Column(
+        "sports_center_id", Integer, ForeignKey("sports_centers.id"), nullable=False
+    )
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # Campos
@@ -107,8 +109,8 @@ class Review(Base):
     comment = Column("comment", String)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    def __init__(self, field_id, user_id, rating, comment=None):
-        self.field_id = field_id
+    def __init__(self, sports_center_id, user_id, rating, comment=None):
+        self.sports_center_id = sports_center_id
         self.user_id = user_id
         self.rating = rating
         self.comment = comment
