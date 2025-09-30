@@ -3,7 +3,6 @@ version: "3.9"
 services:
   db:
     image: postgres:15
-    container_name: postgres_bolamarcada
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -16,7 +15,6 @@ services:
 
   api:
     build: .
-    container_name: api_bolamarcada
     restart: always
     env_file:
       - .env
