@@ -1,0 +1,8 @@
+env:
+  POSTGRES_SERVER: "localhost"
+  POSTGRES_USER: "postgres"
+  POSTGRES_PASSWORD: "1234"
+  POSTGRES_DB: "bolamarcada"
+
+  SECRET_KEY: "depoisarrumoisso"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "30"
