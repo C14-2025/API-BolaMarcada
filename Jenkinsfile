@@ -46,7 +46,7 @@ $git
                 printf "%s\n" "$APP_ENV" | tr -d '\\r' > .env
                 echo "[ci] .env criado a partir do credential 'app-env'"
 
-                # exporta as variáveis para este shell (útil caso algum passo precise direto)
+                # exporta variáveis para este shell (se algum passo precisar direto)
                 set -a
                 . ./.env
                 set +a
@@ -57,20 +57,24 @@ $git
               powershell '''
 $ErrorActionPreference = "Stop"
 $dest = Join-Path $PWD.Path '.env'
-# grava o conteúdo do Secret text no .env
+
+# Grava o conteúdo do Secret text no .env
 [System.IO.File]::WriteAllText($dest, $Env:APP_ENV)
 Write-Host "[ci] .env criado a partir do credential 'app-env'"
 
-# exporta as variáveis para o processo atual (caso algum passo use direto)
+# Exporta as variáveis (.env estilo KEY=VALUE) para o processo atual, sem regex
 Get-Content $dest | ForEach-Object {
-  if ($_ -match '^\s*#') { return }
-  if ($_ -match '^\s*$') { return }
-  $kv = $_ -split '=', 2
-  if ($kv.Count -eq 2) {
-    $k = $kv[0].Trim()
-    $v = $kv[1]
-    [System.Environment]::SetEnvironmentVariable($k, $v, 'Process')
-  }
+  if ($_ -eq $null) { return }
+  $line = $_.ToString()
+  $trim = $line.Trim()
+  if ($trim.Length -eq 0) { return }            # linha em branco
+  if ($trim.StartsWith('#')) { return }         # comentário
+
+  $kv = $line.Split('=', 2)
+  if ($kv.Count -ne 2) { return }               # ignora linhas inválidas
+  $k = $kv[0].Trim()
+  $v = $kv[1]                                   # mantenha o valor como está
+  [System.Environment]::SetEnvironmentVariable($k, $v, 'Process')
 }
               '''
             }
@@ -98,7 +102,7 @@ Get-Content $dest | ForEach-Object {
               cleanup() { $compose_cmd down -v || true; }
               trap cleanup EXIT
 
-              # docker compose lê automaticamente o arquivo .env na raiz do projeto
+              # docker compose lê automaticamente .env na raiz
               $compose_cmd up -d db
               $compose_cmd run --rm api bash scripts/run_tests.sh
             '''
@@ -114,7 +118,7 @@ try { docker compose version | Out-Null } catch {
 }
 Write-Host "Usando: $composeCmd"
 
-# docker compose carrega .env automaticamente
+# docker compose lê automaticamente .env na raiz
 Invoke-Expression "$composeCmd up -d db"
 try {
   Invoke-Expression "$composeCmd run --rm api bash scripts/run_tests.sh"
