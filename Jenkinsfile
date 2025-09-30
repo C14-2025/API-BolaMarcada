@@ -115,10 +115,11 @@ services:
 
               $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml up -d db
 
-              # Normaliza CRLF sem editar in-place (evita erro no Windows)
+              # Normaliza CRLF sem editar in-place (evita erro de rename/sed no Windows FS)
               $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash -lc 'tr -d "\\r" < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh'
             '''
           } else {
+            // ===== Windows/PowerShell: usa & docker @args (evita Invoke-Expression e problemas de aspas)
             powershell '''
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path "reports" | Out-Null
@@ -129,21 +130,26 @@ $Env:COMPOSE_PROJECT_NAME = "fastapi-ci-$Env:BUILD_NUMBER"
 $Env:POSTGRES_USER     = $Env:DB_USR
 $Env:POSTGRES_PASSWORD = $Env:DB_PSW
 
-$composeCmd = 'docker compose'
-try { docker compose version | Out-Null } catch {
-  if (Get-Command docker-compose -ErrorAction SilentlyContinue) { $composeCmd = 'docker-compose' }
-}
-Write-Host "Usando: $composeCmd"
-
 $dc  = Join-Path $Env:WORKSPACE 'docker-compose.yml'
 $ci  = Join-Path $Env:WORKSPACE 'docker-compose.ci.yml'
 
-Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" up -d db"
+# docker compose up -d db
+$upArgs = @('compose','-f', $dc, '-f', $ci, 'up','-d','db')
+& docker @upArgs
+
 try {
-  # Normaliza CRLF sem in-place
-  Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" run --rm api bash -lc 'tr -d \"\\r\" < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh'"
-} finally {
-  try { Invoke-Expression "$composeCmd -f `"$dc`" -f `"$ci`" down -v" } catch { Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)" }
+  # bash -lc "tr -d '\r' < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh"
+  $cmdStr = "tr -d '\r' < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh"
+  $runArgs = @('compose','-f', $dc, '-f', $ci, 'run','--rm','api','bash','-lc', $cmdStr)
+  & docker @runArgs
+}
+finally {
+  try {
+    $downArgs = @('compose','-f', $dc, '-f', $ci, 'down','-v')
+    & docker @downArgs
+  } catch {
+    Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)"
+  }
 }
 '''
           }
@@ -277,7 +283,7 @@ $args = @(
                 || docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
                   release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
 
-                # envia também quaisquer tar gerados em artifacts/ (shell POSIX)
+                # envia também quaisquer tar gerados em artifacts/
                 docker run --rm -v "$PWD:/w" -w /w \
                   -e GH_TOKEN="$GITHUB_TOKEN" -e TAG="$TAG" -e REPO_SLUG="$REPO_SLUG" \
                   ghcr.io/cli/cli:latest sh -lc 'set -- artifacts/*.tar; if [ -e "$1" ]; then gh release upload "$TAG" "$@" --repo "$REPO_SLUG" --clobber; fi'
@@ -313,129 +319,4 @@ $body = @{
   body       = "Artefatos do Jenkins. Imagem Docker: ghcr.io/$owner/ci-api:$($Env:IMAGE_TAG)"
   draft      = $false
   prerelease = $false
-} | ConvertTo-Json
-
-try {
-  $res = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases" -Headers $Headers -Body $body
-} catch {
-  if ($_.Exception.Response.StatusCode.Value__ -eq 422) {
-    $res = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases/tags/$TAG" -Headers $Headers
-  } else { throw }
-}
-
-# remove o sufixo "{...}" da URL de upload sem regex (evita conflito no Groovy)
-$uploadUrl = $res.upload_url.Split('{')[0]
-
-# arquivos para enviar
-$files = @("reports/junit.xml","build-info.txt")
-$tarFiles = Get-ChildItem -Path "artifacts" -Filter *.tar -ErrorAction SilentlyContinue
-if ($tarFiles) { $files += $tarFiles.FullName }
-
-foreach ($f in $files) {
-  if (Test-Path $f) {
-    $name = [IO.Path]::GetFileName($f)
-    Invoke-RestMethod -Method Post -Uri "$uploadUrl?name=$name" `
-      -Headers @{ Authorization = $Headers.Authorization; "Content-Type" = "application/octet-stream"; "User-Agent" = "jenkins-ci" } `
-      -InFile $f | Out-Null
-  }
-}
-              '''
-            }
-          }
-        }
-
-        // 2) Push da imagem para GHCR (Packages)
-        withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
-          script {
-            if (isUnix()) {
-              sh '''
-                set -e
-                OWNER="${REPO_SLUG%%/*}"
-                echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-                TARGET="ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}"
-                docker tag ${IMAGE_NAME}:${IMAGE_TAG} "$TARGET"
-                docker push "$TARGET"
-              '''
-            } else {
-              powershell '''
-$ErrorActionPreference = "Stop"
-$OWNER = $Env:REPO_SLUG.Split('/')[0]
-$TARGET = "ghcr.io/$OWNER/ci-api:$($Env:IMAGE_TAG)"
-$Env:GHCR_TOKEN | docker login ghcr.io -u $Env:GHCR_USER --password-stdin
-docker tag "$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)" $TARGET
-docker push $TARGET
-              '''
-            }
-          }
-        }
-      }
-    }
-  }
-
-  post {
-    always {
-      // status final disponível para shells
-      script { env.CI_STATUS = currentBuild.currentResult ?: 'UNKNOWN' }
-
-      withCredentials([
-        usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
-        string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
-      ]) {
-        script {
-          if (isUnix()) {
-            sh '''
-              set -e
-              STATUS="${CI_STATUS}"
-              REPO="$(git config --get remote.origin.url || echo unknown)"
-              BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
-              RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
-
-              docker run --rm -v "$PWD:/app" -w /app \
-                -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
-                -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
-                python:3.13-slim python scripts/notify.py \
-                  --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-            '''
-          } else {
-            powershell '''
-$ErrorActionPreference = "Stop"
-$STATUS = if ($Env:CI_STATUS) { $Env:CI_STATUS } else { "UNKNOWN" }
-$REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
-$BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
-$RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
-
-$volume = "$($Env:WORKSPACE):/app"
-$args = @(
-  'run','--rm','-v', $volume,'-w','/app',
-  '-e', "SMTP_HOST=$($Env:SMTP_HOST)",
-  '-e', "SMTP_PORT=$($Env:SMTP_PORT)",
-  '-e', "SMTP_USER=$($Env:SMTP_USER)",
-  '-e', "SMTP_PASS=$($Env:SMTP_PASS)",
-  '-e', "EMAIL_TO=$($Env:EMAIL_TO)",
-  'python:3.13-slim',
-  'python','scripts/notify.py',
-  '--status', $STATUS,
-  '--run-id', $RUNID,
-  '--repo', $REPO,
-  '--branch', $BRANCH
-)
-& docker @args
-            '''
-          }
-        }
-      }
-
-      // limpeza do docker
-      script {
-        if (isUnix()) {
-          sh 'docker system prune -f || true'
-        } else {
-          powershell '''
-$ErrorActionPreference = "SilentlyContinue"
-try { docker system prune -f | Out-Null } catch { Write-Warning "Falha ao limpar docker: $($_.Exception.Message)" }
-          '''
-        }
-      }
-    }
-  }
-}
+} | ConvertT
