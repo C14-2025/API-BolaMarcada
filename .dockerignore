@@ -1,0 +1,41 @@
+# Ignora tudo por padrão…
+*
+# …e libera só o que precisa pra rodar
+!Dockerfile
+!requirements.txt
+!main.py
+!app/**
+!alembic.ini
+!alembic/**
+
+# (se você tiver outro layout, libere suas pastas de código aqui ^)
+
+# Sempre ignore:
+.git
+.github
+.vscode
+.idea
+__pycache__/
+*.py[cod]
+*.pyo
+*.log
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.coverage*
+htmlcov/
+.DS_Store
+
+# Ambientes e configs locais
+.env
+.env.*
+.venv/
+venv/
+
+# CI / artefatos
+reports/
+artifacts/
+*.tar
+docker-compose*.yml
+scripts/notify.py
