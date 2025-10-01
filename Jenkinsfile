@@ -13,14 +13,13 @@ pipeline {
     IMAGE_TAG  = ''                 // setado no Checkout (fallback no build)
     SMTP_HOST  = 'smtp.mailtrap.io'
     SMTP_PORT  = '2525'
-    REPO_SLUG  = 'C14-2025/API-BolaMarcada'  // dono/repositorio no GitHub
+    REPO_SLUG  = 'C14-2025/API-BolaMarcada'
 
-    // ===== Credentials (um por variável) =====
-    POSTGRES_SERVER = credentials('postgres-server')         // Secret text: db
-    POSTGRES_DB     = credentials('postgres-dbname')         // Secret text: bolamarcadadb
-    SECRET_KEY      = credentials('app-secret-key')          // Secret text
-    ACCESS_TOKEN_EXPIRE_MINUTES = credentials('access-token-expire') // Secret text
-    DB = credentials('pg-db') // Username+Password -> cria DB_USR e DB_PSW
+    POSTGRES_SERVER = credentials('postgres-server')
+    POSTGRES_DB     = credentials('postgres-dbname')
+    SECRET_KEY      = credentials('app-secret-key')
+    ACCESS_TOKEN_EXPIRE_MINUTES = credentials('access-token-expire')
+    DB = credentials('pg-db') // cria DB_USR e DB_PSW
   }
 
   stages {
@@ -47,15 +46,8 @@ $git
     stage('Prechecks') {
       steps {
         script {
-          def missing = []
-          if (!fileExists('scripts/wait-for-it.sh')) { missing << 'scripts/wait-for-it.sh' }
-          if (!fileExists('scripts/run_tests.sh'))   { missing << 'scripts/run_tests.sh' }
-          if (missing) {
-            error """Arquivos não encontrados: ${missing.join(', ')}
-Verifique seu .dockerignore e inclua:
-  !scripts/**
-(Se quiser manter notify ignorado: adicione depois 'scripts/notify.py')."""
-          }
+          fileExists('Dockerfile')
+          fileExists('docker-compose.yml')
         }
       }
     }
@@ -68,7 +60,12 @@ Verifique seu .dockerignore e inclua:
 cat > docker-compose.ci.yml <<'YAML'
 services:
   db:
-    ports: []
+    env_file: []            # remove dependência de .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports: []               # não expõe porta no agente CI
   api:
     env_file: []
     environment:
@@ -86,6 +83,11 @@ YAML
 $override = @'
 services:
   db:
+    env_file: []
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports: []
   api:
     env_file: []
@@ -113,8 +115,6 @@ services:
 set -e
 mkdir -p reports artifacts
 export COMPOSE_PROJECT_NAME="fastapi-ci-${BUILD_NUMBER}"
-
-# Mapear DB_USR/DB_PSW para nomes esperados pelo compose/app
 export POSTGRES_USER="$DB_USR"
 export POSTGRES_PASSWORD="$DB_PSW"
 
@@ -122,14 +122,11 @@ compose_cmd="docker compose"
 if ! docker compose version >/dev/null 2>&1; then
   if command -v docker-compose >/dev/null 2>&1; then compose_cmd="docker-compose"; fi
 fi
-echo "Usando: $compose_cmd"
 
 cleanup() { $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml down -v || true; }
 trap cleanup EXIT
 
 $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml up -d db
-
-# Normaliza CRLF sem sed -i (evita erro de rename no FS montado)
 $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash -lc 'tr -d "\\r" < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh'
 '''
           } else {
@@ -139,28 +136,20 @@ New-Item -ItemType Directory -Force -Path "reports" | Out-Null
 New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
 $Env:COMPOSE_PROJECT_NAME = "fastapi-ci-$Env:BUILD_NUMBER"
 
-# Mapeia DB_USR/DB_PSW -> nomes esperados
 $Env:POSTGRES_USER     = $Env:DB_USR
 $Env:POSTGRES_PASSWORD = $Env:DB_PSW
 
 $dc  = Join-Path $Env:WORKSPACE 'docker-compose.yml'
 $ci  = Join-Path $Env:WORKSPACE 'docker-compose.ci.yml'
 
-$upArgs = @('compose','-f', $dc, '-f', $ci, 'up','-d','db')
-& docker @upArgs
+& docker compose -f $dc -f $ci up -d db
 
 try {
   $cmdStr = "tr -d '\r' < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh"
-  $runArgs = @('compose','-f', $dc, '-f', $ci, 'run','--rm','api','bash','-lc', $cmdStr)
-  & docker @runArgs
+  & docker compose -f $dc -f $ci run --rm api bash -lc $cmdStr
 }
 finally {
-  try {
-    $downArgs = @('compose','-f', $dc, '-f', $ci, 'down','-v')
-    & docker @downArgs
-  } catch {
-    Write-Warning "Falha ao derrubar serviços: $($_.Exception.Message)"
-  }
+  try { & docker compose -f $dc -f $ci down -v } catch { Write-Warning "down falhou: $($_.Exception.Message)" }
 }
 '''
           }
@@ -174,7 +163,6 @@ finally {
       }
     }
 
-    // ====== Paralelo exigido (Empacotamento + Notificação) ======
     stage('Paralelo: Empacotamento + Notificação') {
       parallel {
         stage('Empacotamento (Docker)') {
@@ -214,7 +202,7 @@ docker save -o "$archive" "$tag"
             ]) {
               script {
                 if (isUnix()) {
-                  def rc = sh(returnStatus: true, script: '''
+                  sh '''
 set -e
 STATUS="IN_PROGRESS"
 REPO="$(git config --get remote.origin.url || echo unknown)"
@@ -226,35 +214,22 @@ docker run --rm -v "$PWD:/app" -w /app \
   -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
   python:3.13-slim python scripts/notify.py \
     --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-''')
-                  if (rc != 0) { echo "[notify] aviso: email IN_PROGRESS falhou (rc=${rc}), seguindo..." }
+'''
                 } else {
-                  def rc = powershell(returnStatus: true, script: '''
-$ErrorActionPreference = "Continue"
+                  powershell '''
+$ErrorActionPreference = "Stop"
 $STATUS = "IN_PROGRESS"
 $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
 $BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
 $RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
 
 $volume = "$($Env:WORKSPACE):/app"
-$args = @(
-  'run','--rm','-v', $volume,'-w','/app',
-  '-e', "SMTP_HOST=$($Env:SMTP_HOST)",
-  '-e', "SMTP_PORT=$($Env:SMTP_PORT)",
-  '-e', "SMTP_USER=$($Env:SMTP_USER)",
-  '-e', "SMTP_PASS=$($Env:SMTP_PASS)",
-  '-e', "EMAIL_TO=$($Env:EMAIL_TO)",
-  'python:3.13-slim',
-  'python','scripts/notify.py',
-  '--status', $STATUS,
-  '--run-id', $RUNID,
-  '--repo', $REPO,
-  '--branch', $BRANCH
-)
-& docker @args
-exit $LASTEXITCODE
-''')
-                  if (rc != 0) { echo "[notify] aviso: email IN_PROGRESS falhou (rc=${rc}), seguindo..." }
+docker run --rm -v $volume -w /app `
+  -e SMTP_HOST=$Env:SMTP_HOST -e SMTP_PORT=$Env:SMTP_PORT `
+  -e SMTP_USER=$Env:SMTP_USER -e SMTP_PASS=$Env:SMTP_PASS -e EMAIL_TO=$Env:EMAIL_TO `
+  python:3.13-slim python scripts/notify.py `
+    --status $STATUS --run-id $RUNID --repo $REPO --branch $BRANCH
+'''
                 }
               }
             }
@@ -263,12 +238,9 @@ exit $LASTEXITCODE
       }
     }
 
-    // ===== Publicar artefatos no GitHub (Release + GHCR) =====
     stage('Publicar artefatos no GitHub') {
       steps {
         script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
-
-        // 1) Release com junit.xml + build-info.txt (+ artifacts/*.tar se existir)
         withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
           script {
             if (isUnix()) {
@@ -285,22 +257,27 @@ OWNER="${REPO_SLUG%%/*}"
   echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
 } > build-info.txt
 
-# login no GHCR para conseguir puxar ghcr.io/cli/cli
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
 
-# cria release (ou faz upload se já existir)
 docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-  release create "$TAG" reports/junit.xml build-info.txt \
+  gh release create "$TAG" build-info.txt \
   --repo "${REPO_SLUG}" \
   --title "Build ${BUILD_NUMBER} (${GIT_SHORT})" \
   --notes "Artefatos do Jenkins. Imagem Docker: ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}" \
 || docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-  release upload "$TAG" reports/junit.xml build-info.txt --repo "${REPO_SLUG}" --clobber
+  gh release upload "$TAG" build-info.txt --repo "${REPO_SLUG}" --clobber
 
-# envia também quaisquer tar gerados em artifacts/
-docker run --rm -v "$PWD:/w" -w /w \
-  -e GH_TOKEN="$GITHUB_TOKEN" -e TAG="$TAG" -e REPO_SLUG="$REPO_SLUG" \
-  ghcr.io/cli/cli:latest sh -lc 'set -- artifacts/*.tar; if [ -e "$1" ]; then gh release upload "$TAG" "$@" --repo "$REPO_SLUG" --clobber; fi'
+# envia junit se existir
+if [ -f reports/junit.xml ]; then
+  docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+    gh release upload "$TAG" reports/junit.xml --repo "${REPO_SLUG}" --clobber
+fi
+
+# envia .tar se existir
+set -- artifacts/*.tar; if [ -e "$1" ]; then
+  docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
+    gh release upload "$TAG" "$@" --repo "${REPO_SLUG}" --clobber
+fi
 '''
             } else {
               powershell '''
@@ -321,69 +298,39 @@ $lines = @(
 )
 [IO.File]::WriteAllLines((Join-Path $Env:WORKSPACE 'build-info.txt'), $lines)
 
-$Headers = @{
-  Authorization = "Bearer $($Env:GITHUB_TOKEN)"
-  Accept        = "application/vnd.github+json"
-  "User-Agent"  = "jenkins-ci"
+# login pra puxar ghcr.io/cli/cli
+docker login ghcr.io -u $Env:GH_USER -p $Env:GITHUB_TOKEN | Out-Null
+$volume = "$($Env:WORKSPACE):/w"
+
+# cria release (ou usa existente)
+docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
+  gh release create $TAG build-info.txt `
+  --repo $Env:REPO_SLUG `
+  --title "Build $($Env:BUILD_NUMBER) ($($Env:GIT_SHORT))" `
+  --notes "Artefatos do Jenkins. Imagem Docker: ghcr.io/$owner/ci-api:$($Env:IMAGE_TAG)" `
+  2>$null
+
+if ($LASTEXITCODE -ne 0) {
+  docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
+    gh release upload $TAG build-info.txt --repo $Env:REPO_SLUG --clobber
 }
 
-# cria ou obtém release
-$body = @{
-  tag_name   = $TAG
-  name       = "Build $($Env:BUILD_NUMBER) ($($Env:GIT_SHORT))"
-  body       = "Artefatos do Jenkins. Imagem Docker: ghcr.io/$owner/ci-api:$($Env:IMAGE_TAG)"
-  draft      = $false
-  prerelease = $false
-} | ConvertTo-Json
-
-try {
-  $res = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases" -Headers $Headers -ContentType 'application/json' -Body $body
-} catch {
-  if ($_.Exception.Response.StatusCode.Value__ -eq 422) {
-    $res = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$($Env:REPO_SLUG)/releases/tags/$TAG" -Headers $Headers
-  } else { throw }
+if (Test-Path 'reports/junit.xml') {
+  docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
+    gh release upload $TAG reports/junit.xml --repo $Env:REPO_SLUG --clobber
 }
 
-# Upload URL sem regex
-$uploadBase = $null
-if ($res.upload_url) {
-  $uploadBase = $res.upload_url.Split('{')[0]
-} elseif ($res.assets_url) {
-  $uploadBase = $res.assets_url.Replace('https://api.github.com','https://uploads.github.com')
-} else {
-  throw "GitHub release response sem upload_url/assets_url: $( $res | ConvertTo-Json -Depth 5 )"
-}
-
-if ([string]::IsNullOrWhiteSpace($uploadBase) -or -not $uploadBase.StartsWith('https://')) {
-  throw "uploadBase inválido: '$uploadBase'"
-}
-
-Write-Host "Upload base: $uploadBase"
-
-# arquivos para enviar
-$files = @("reports/junit.xml","build-info.txt")
 $tarFiles = Get-ChildItem -Path "artifacts" -Filter *.tar -ErrorAction SilentlyContinue
-if ($tarFiles) { $files += $tarFiles.FullName }
-
-foreach ($f in $files) {
-  if (Test-Path $f) {
-    $name = [IO.Path]::GetFileName($f)
-    $encoded = [uri]::EscapeDataString($name)
-    $uri = "$uploadBase?name=$encoded"
-    Invoke-RestMethod -Method Post -Uri $uri `
-      -Headers @{ Authorization = $Headers.Authorization; "Content-Type" = "application/octet-stream"; "User-Agent" = "jenkins-ci" } `
-      -InFile $f | Out-Null
-    Write-Host "Enviado: $name"
-  } else {
-    Write-Warning "Arquivo não encontrado: $f"
-  }
+foreach ($tar in $tarFiles) {
+  $rel = "artifacts/" + $tar.Name
+  docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
+    gh release upload $TAG $rel --repo $Env:REPO_SLUG --clobber
 }
 '''
             }
           }
         }
 
-        // 2) Push da imagem para GHCR (Packages)
         withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
           script {
             if (isUnix()) {
@@ -398,7 +345,7 @@ docker push "$TARGET"
             } else {
               powershell '''
 $ErrorActionPreference = "Stop"
-$OWNER = $Env:REPO_SLUG.Split('/')[0]
+$OWNER  = $Env:REPO_SLUG.Split('/')[0]
 $TARGET = "ghcr.io/$OWNER/ci-api:$($Env:IMAGE_TAG)"
 $Env:GHCR_TOKEN | docker login ghcr.io -u $Env:GHCR_USER --password-stdin
 docker tag "$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)" $TARGET
@@ -420,66 +367,50 @@ docker push $TARGET
         string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
       ]) {
         script {
-          // pequeno delay para evitar "Too many emails per second"
-          sleep time: 3, unit: 'SECONDS'
           if (isUnix()) {
-            retry(2) {
-              def rc = sh(returnStatus: true, script: '''
+            sh '''
 set -e
 STATUS="${CI_STATUS}"
 REPO="$(git config --get remote.origin.url || echo unknown)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
 RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
 
+# anti-rate-limit: pequeno atraso se acabou de enviar em paralelo
+sleep 3
+
 docker run --rm -v "$PWD:/app" -w /app \
   -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
   -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
   python:3.13-slim python scripts/notify.py \
     --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-''')
-              if (rc != 0) { echo "[notify] aviso: email final falhou (rc=${rc}), seguindo..." ; sleep 2 }
-            }
+'''
           } else {
-            retry(2) {
-              def rc = powershell(returnStatus: true, script: '''
-$ErrorActionPreference = "Continue"
+            powershell '''
+$ErrorActionPreference = "Stop"
+Start-Sleep -Seconds 3
 $STATUS = if ($Env:CI_STATUS) { $Env:CI_STATUS } else { "UNKNOWN" }
 $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
 $BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
 $RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
 
 $volume = "$($Env:WORKSPACE):/app"
-$args = @(
-  'run','--rm','-v', $volume,'-w','/app',
-  '-e', "SMTP_HOST=$($Env:SMTP_HOST)",
-  '-e', "SMTP_PORT=$($Env:SMTP_PORT)",
-  '-e', "SMTP_USER=$($Env:SMTP_USER)",
-  '-e', "SMTP_PASS=$($Env:SMTP_PASS)",
-  '-e', "EMAIL_TO=$($Env:EMAIL_TO)",
-  'python:3.13-slim',
-  'python','scripts/notify.py',
-  '--status', $STATUS,
-  '--run-id', $RUNID,
-  '--repo', $REPO,
-  '--branch', $BRANCH
-)
-& docker @args
-exit $LASTEXITCODE
-''')
-              if (rc != 0) { echo "[notify] aviso: email final falhou (rc=${rc}), seguindo..." ; sleep 2 }
-            }
+docker run --rm -v $volume -w /app `
+  -e SMTP_HOST=$Env:SMTP_HOST -e SMTP_PORT=$Env:SMTP_PORT `
+  -e SMTP_USER=$Env:SMTP_USER -e SMTP_PASS=$Env:SMTP_PASS -e EMAIL_TO=$Env:EMAIL_TO `
+  python:3.13-slim python scripts/notify.py `
+    --status $STATUS --run-id $RUNID --repo $REPO --branch $BRANCH
+'''
           }
         }
       }
 
-      // limpeza do docker
       script {
         if (isUnix()) {
           sh 'docker system prune -f || true'
         } else {
           powershell '''
 $ErrorActionPreference = "SilentlyContinue"
-try { docker system prune -f | Out-Null } catch { Write-Warning "Falha ao limpar docker: $($_.Exception.Message)" }
+try { docker system prune -f | Out-Null } catch { Write-Warning "limpeza docker falhou: $($_.Exception.Message)" }
 '''
         }
       }
