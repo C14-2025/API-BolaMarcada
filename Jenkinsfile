@@ -156,23 +156,73 @@ pipeline {
     }
 
     stage('Upload GitHub Release (opcional)') {
-      when {
-        allOf {
-          expression { return params.ENABLE_GH_RELEASE }
-          expression { return env.BRANCH == 'feat/CICD/Jenkins' }
-        }
-      }
-      steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-          withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
-            bat """
-              @echo on
-              docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "set -e; apk add --no-cache bash curl jq; if [ -f scripts/upload_github_release.sh ]; then tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh; chmod +x /tmp/gh_release.sh; GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=ci-%COMMIT% ASSET_PATH=%IMAGE_TAR% bash /tmp/gh_release.sh; else echo 'scripts/upload_github_release.sh nao encontrado, pulando.'; fi"
-            """
-          }
-        }
+  when {
+    allOf {
+      expression { return params.ENABLE_GH_RELEASE }
+      expression { return env.BRANCH == 'feat/CICD/Jenkins' }
+    }
+  }
+  steps {
+    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+      withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
+        bat """
+          @echo on
+          docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "
+            set -e
+            apk add --no-cache curl jq python3
+
+            # TAG do release (se preferir por build, troque para: TAG=ci-%BUILD_NUMBER%)
+            TAG=ci-%COMMIT%
+            # Nome exibido no GitHub
+            NAME=\\"%JOB_NAME% #%BUILD_NUMBER% — %BRANCH% @ %COMMIT%\\"
+            GH_API=https://api.github.com/repos/C14-2025/API-BolaMarcada
+
+            # Calcula cobertura para o corpo do release
+            COVPCT=\$(python3 - <<'PY'
+import xml.etree.ElementTree as ET
+try:
+  root=ET.parse('coverage.xml').getroot()
+  pct=float(root.attrib.get('line-rate',0))*100
+  print(f'{pct:.1f}')
+except Exception:
+  print('0.0')
+PY
+)
+            TESTS=\$(cat status_tests.txt 2>/dev/null || echo UNKNOWN)
+            PKG=\$(cat status_package.txt 2>/dev/null || echo UNKNOWN)
+            BODY=\$(printf 'Branch: %s\\nCommit: %s\\nTests: %s\\nPackage: %s\\nCoverage: %s%%\\n' '%BRANCH%' '%COMMIT%' \"\$TESTS\" \"\$PKG\" \"\$COVPCT\")
+
+            # Busca release por tag
+            RID=\$(curl -s -H 'Authorization: token %GH_PAT%' \${GH_API}/releases/tags/\${TAG} | jq -r '.id?')
+
+            if [ \"\$RID\" = \"null\" ] || [ -z \"\$RID\" ]; then
+              # Cria release já como não-prerelease e não-draft
+              PAYLOAD=\$(jq -n --arg tag \"\$TAG\" --arg name \"\$NAME\" --arg body \"\$BODY\" '{tag_name:$tag,name:$name,body:$body,prerelease:false,draft:false}')
+              RID=\$(curl -s -H 'Authorization: token %GH_PAT%' -H 'Content-Type: application/json' -d \"\$PAYLOAD\" \${GH_API}/releases | jq -r '.id')
+            else
+              # Atualiza nome, corpo e remove rótulo de pre-release/draft se tiver
+              PAYLOAD=\$(jq -n --arg name \"\$NAME\" --arg body \"\$BODY\" '{name:$name,body:$body,prerelease:false,draft:false}')
+              curl -s -X PATCH -H 'Authorization: token %GH_PAT%' -H 'Content-Type: application/json' -d \"\$PAYLOAD\" \${GH_API}/releases/\${RID} >/dev/null
+            fi
+
+            # Funções auxiliares: remove asset se já existir (evita 422) e envia
+            del_asset(){ aname=\$1; aid=\$(curl -s -H 'Authorization: token %GH_PAT%' \${GH_API}/releases/\${RID}/assets | jq -r '.[] | select(.name==\"'\"\$aname\"'\") | .id'); [ -n \"\$aid\" ] && curl -s -X DELETE -H 'Authorization: token %GH_PAT%' \${GH_API}/releases/assets/\${aid} >/dev/null || true; }
+            upload(){ f=\$1; n=\$2; [ -f \"\$f\" ] && del_asset \"\$n\" && curl -s -H 'Authorization: token %GH_PAT%' -H 'Content-Type: application/octet-stream' --data-binary @\"\$f\" \"https://uploads.github.com/repos/C14-2025/API-BolaMarcada/releases/\${RID}/assets?name=\$n\" >/dev/null || true; }
+
+            # Envia artefatos (ajuste a lista conforme o que você está gerando)
+            upload %IMAGE_TAR% image-%COMMIT%.tar
+            upload %JUNIT_XML% report-junit.xml
+            upload %COVERAGE_XML% coverage.xml
+            [ -f coverage-html.tar.gz ] && upload coverage-html.tar.gz coverage-html-%COMMIT%.tar.gz || true
+
+            echo 'Release atualizado.'
+          "
+        """
       }
     }
+  }
+}
+
 
     stage('Notificação') {
       steps {
