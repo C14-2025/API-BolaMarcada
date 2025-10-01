@@ -1,12 +1,18 @@
 # Ignora tudo por padrão…
 *
 # …e libera só o que precisa pra rodar
-!Dockerfile
-!requirements.txt
-!main.py
-!app/**
-!alembic.ini
-!alembic/**
+ !Dockerfile
+ !requirements.txt
+ !main.py
+ !app/**
+ !alembic.ini
+ !alembic/**
++!scripts/**
+ ...
+- scripts/notify.py
++# mantém este ignore DEPOIS do !scripts/** para voltar a ignorar só esse arquivo
++scripts/notify.py
+
 
 # (se você tiver outro layout, libere suas pastas de código aqui ^)
 
