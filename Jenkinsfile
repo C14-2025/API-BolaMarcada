@@ -8,8 +8,11 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'ENABLE_GH_RELEASE', defaultValue: true,
-      description: 'Publicar image-<commit>.tar como asset em um Release do GitHub (opcional)')
+    booleanParam(
+      name: 'ENABLE_GH_RELEASE',
+      defaultValue: true,
+      description: 'Publicar image-<commit>.tar como asset em um Release do GitHub (opcional)'
+    )
   }
 
   environment {
@@ -30,11 +33,18 @@ pipeline {
       steps {
         checkout scm
         script {
-          // captura a última linha do output do bat
-          def commitOut = bat(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim().readLines()
-          def branchOut = bat(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim().readLines()
-          env.COMMIT    = commitOut[commitOut.size()-1].trim()
-          env.BRANCH    = branchOut[branchOut.size()-1].trim()
+          // commit curto
+          env.COMMIT = bat(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim().readLines().last().trim()
+
+          // branch robusto (evita HEAD em detached)
+          def guess = env.BRANCH_NAME ?: env.GIT_BRANCH
+          if (!guess || guess.trim() == 'HEAD') {
+            def nameRev = bat(script: 'git name-rev --name-only HEAD', returnStdout: true).trim()
+            guess = nameRev ?: 'unknown'
+          }
+          guess = guess.replaceFirst(/^origin\\//, '').replaceFirst(/^remotes\\/origin\\//, '')
+          env.BRANCH = guess
+
           env.IMAGE     = "app:${env.COMMIT}"
           env.IMAGE_TAR = "image-${env.COMMIT}.tar"
         }
@@ -54,13 +64,14 @@ pipeline {
     stage('CI (parallel)') {
       failFast false
       parallel {
+
         stage('Testes') {
           steps {
             script {
               catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                 withCredentials([
-                  string(credentialsId: 'app-secret-key',        variable: 'SECRET_KEY'),
-                  string(credentialsId: 'access-token-expire',  variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
+                  string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
+                  string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
                 ]) {
                   bat """
                     @echo on
@@ -69,23 +80,14 @@ pipeline {
 
                     rem -- sobe Postgres
                     docker rm -f ci-db 2>nul
-                    docker run -d --name ci-db --network ci_net -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% -p %PGPORT%:5432 postgres:17-alpine
+                    docker run -d --name ci-db --network ci_net ^
+                      -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
+                      -p %PGPORT%:5432 postgres:17-alpine
 
-                    rem -- espera Postgres (até 60s)
-                    setlocal EnableDelayedExpansion
-                    for /L %%i in (1,1,60) do (
-                      docker exec ci-db pg_isready -U %PGUSER% -d %PGDB%
-                      if !errorlevel! EQU 0 (
-                        echo DB OK
-                        goto :dbready
-                      )
-                      timeout /t 1 >nul
-                    )
-                    echo Postgres nao ficou pronto a tempo
-                    exit /b 1
-                    :dbready
+                    rem -- espera Postgres via container Linux
+                    docker run --rm --network ci_net postgres:17-alpine sh -lc "until pg_isready -h %PGHOST% -p 5432 -U %PGUSER% -d %PGDB%; do sleep 1; done"
 
-                    rem -- executa pytest dentro da SUA imagem, montando o workspace
+                    rem -- roda pytest dentro da SUA imagem (garante pytest+pytest-cov)
                     docker run --rm --network ci_net ^
                       -e POSTGRES_SERVER=%PGHOST% -e POSTGRES_HOST=%PGHOST% ^
                       -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
@@ -93,9 +95,15 @@ pipeline {
                       -e SECRET_KEY=%SECRET_KEY% ^
                       -e ACCESS_TOKEN_EXPIRE_MINUTES=%ACCESS_TOKEN_EXPIRE_MINUTES% ^
                       -v "%cd%":/workspace -w /app %IMAGE% ^
-                      sh -c "pytest -q --junit-xml=/workspace/%JUNIT_XML% --cov=. --cov-report=xml:/workspace/%COVERAGE_XML%"
+                      sh -lc "python -m pip install -q --disable-pip-version-check pytest pytest-cov && pytest -q --junit-xml=/workspace/%JUNIT_XML% --cov=. --cov-report=xml:/workspace/%COVERAGE_XML%"
 
-                    echo SUCCESS > status_tests.txt
+                    set RC=%errorlevel%
+                    if %RC%==0 (
+                      echo SUCCESS>status_tests.txt
+                    ) else (
+                      echo FAILURE>status_tests.txt
+                      exit /b %RC%
+                    )
                   """
                 }
               }
@@ -126,7 +134,8 @@ pipeline {
                 bat """
                   @echo on
                   docker save %IMAGE% -o %IMAGE_TAR%
-                  echo SUCCESS > status_package.txt
+                  set RC=%errorlevel%
+                  if %RC%==0 (echo SUCCESS>status_package.txt) else (echo FAILURE>status_package.txt & exit /b %RC%)
                 """
               }
             }
@@ -142,7 +151,8 @@ pipeline {
             }
           }
         }
-      }
+
+      } // parallel
     }
 
     stage('Upload GitHub Release (opcional)') {
@@ -153,12 +163,13 @@ pipeline {
         }
       }
       steps {
-        withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
-          bat """
-            @echo on
-            rem executa dentro de um container Alpine (Linux), com o workspace montado
-            docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "apk add --no-cache curl jq dos2unix && dos2unix scripts/upload_github_release.sh && GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=ci-%COMMIT% ASSET_PATH=%IMAGE_TAR% scripts/upload_github_release.sh"
-          """
+        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+          withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
+            bat """
+              @echo on
+              docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "apk add --no-cache curl jq dos2unix && if [ -f scripts/upload_github_release.sh ]; then dos2unix scripts/upload_github_release.sh; GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=ci-%COMMIT% ASSET_PATH=%IMAGE_TAR% scripts/upload_github_release.sh; else echo 'scripts/upload_github_release.sh não encontrado, pulando.'; fi"
+            """
+          }
         }
       }
     }
@@ -166,8 +177,58 @@ pipeline {
     stage('Notificação') {
       steps {
         script {
-          def testsStatus   = readFile('status_tests.txt').trim()
-          def packageStatus = readFile('status_package.txt').trim()
+          def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
+          def packageStatus = fileExists('status_package.txt') ? readFile('status_package.txt').trim() : 'FAILURE'
+
+          // garante o script de notificação caso não exista no repo
+          if (!fileExists('scripts')) {
+            bat 'mkdir scripts 2>nul'
+          }
+          if (!fileExists('scripts/notify_email.py')) {
+            writeFile file: 'scripts/notify_email.py', text: '''
+import os, smtplib, socket
+from email.message import EmailMessage
+
+to_email   = os.environ.get("TO_EMAIL", "")
+from_email = os.environ.get("FROM_EMAIL", "ci@jenkins.local")
+smtp_host  = os.environ.get("SMTP_SERVER", "smtp.mailtrap.io")
+smtp_port  = int(os.environ.get("SMTP_PORT", "2525"))
+smtp_user  = os.environ.get("SMTP_USERNAME", "")
+smtp_pass  = os.environ.get("SMTP_PASSWORD", "")
+tests      = os.environ.get("TESTS_STATUS", "UNKNOWN")
+package    = os.environ.get("PACKAGE_STATUS", "UNKNOWN")
+sha        = os.environ.get("GIT_SHA", "")
+branch     = os.environ.get("GIT_BRANCH", "")
+run_id     = os.environ.get("GITHUB_RUN_ID", "")
+run_num    = os.environ.get("GITHUB_RUN_NUMBER", "")
+
+body = f"""Pipeline Jenkins finalizado.
+
+Branch: {branch}
+Commit: {sha}
+
+Testes:   {tests}
+Empacote: {package}
+
+Run ID: {run_id}
+Run #:  {run_num}
+Host:   {socket.gethostname()}
+"""
+
+msg = EmailMessage()
+msg["Subject"] = f"[CI] {branch} @ {sha} — tests:{tests} pkg:{package}"
+msg["From"] = from_email
+msg["To"] = to_email
+msg.set_content(body)
+
+with smtplib.SMTP(smtp_host, smtp_port) as s:
+    if smtp_user or smtp_pass:
+        s.login(smtp_user, smtp_pass)
+    s.send_message(msg)
+print("Email enviado para", to_email)
+'''.strip()
+          }
+
           withCredentials([
             usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
             string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
@@ -178,7 +239,7 @@ pipeline {
                 -e TO_EMAIL=%TO_EMAIL% ^
                 -e SMTP_SERVER=smtp.mailtrap.io ^
                 -e SMTP_PORT=2525 ^
-                -e FROM_EMAIL= ^
+                -e FROM_EMAIL=ci@jenkins.local ^
                 -e SMTP_USERNAME=%SMTP_USERNAME% ^
                 -e SMTP_PASSWORD=%SMTP_PASSWORD% ^
                 -e TESTS_STATUS=${testsStatus} ^
