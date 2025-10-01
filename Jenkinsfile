@@ -44,6 +44,22 @@ $git
       }
     }
 
+    stage('Prechecks') {
+      steps {
+        script {
+          def missing = []
+          if (!fileExists('scripts/wait-for-it.sh')) { missing << 'scripts/wait-for-it.sh' }
+          if (!fileExists('scripts/run_tests.sh'))   { missing << 'scripts/run_tests.sh' }
+          if (missing) {
+            error """Arquivos não encontrados: ${missing.join(', ')}
+Verifique seu .dockerignore e inclua:
+  !scripts/**
+(Se quiser manter notify ignorado: adicione depois 'scripts/notify.py')."""
+          }
+        }
+      }
+    }
+
     stage('Compose override (CI)') {
       steps {
         script {
@@ -198,7 +214,7 @@ docker save -o "$archive" "$tag"
             ]) {
               script {
                 if (isUnix()) {
-                  sh '''
+                  def rc = sh(returnStatus: true, script: '''
 set -e
 STATUS="IN_PROGRESS"
 REPO="$(git config --get remote.origin.url || echo unknown)"
@@ -210,10 +226,11 @@ docker run --rm -v "$PWD:/app" -w /app \
   -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
   python:3.13-slim python scripts/notify.py \
     --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-'''
+''')
+                  if (rc != 0) { echo "[notify] aviso: email IN_PROGRESS falhou (rc=${rc}), seguindo..." }
                 } else {
-                  powershell '''
-$ErrorActionPreference = "Stop"
+                  def rc = powershell(returnStatus: true, script: '''
+$ErrorActionPreference = "Continue"
 $STATUS = "IN_PROGRESS"
 $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
 $BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
@@ -235,7 +252,9 @@ $args = @(
   '--branch', $BRANCH
 )
 & docker @args
-'''
+exit $LASTEXITCODE
+''')
+                  if (rc != 0) { echo "[notify] aviso: email IN_PROGRESS falhou (rc=${rc}), seguindo..." }
                 }
               }
             }
@@ -244,7 +263,7 @@ $args = @(
       }
     }
 
-    // ===== NOVO: Publicar artefatos no GitHub (Release + GHCR) =====
+    // ===== Publicar artefatos no GitHub (Release + GHCR) =====
     stage('Publicar artefatos no GitHub') {
       steps {
         script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
@@ -284,7 +303,6 @@ docker run --rm -v "$PWD:/w" -w /w \
   ghcr.io/cli/cli:latest sh -lc 'set -- artifacts/*.tar; if [ -e "$1" ]; then gh release upload "$TAG" "$@" --repo "$REPO_SLUG" --clobber; fi'
 '''
             } else {
-              // PowerShell: sem regex (evita '\{')
               powershell '''
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -395,7 +413,6 @@ docker push $TARGET
 
   post {
     always {
-      // status final disponível para shells
       script { env.CI_STATUS = currentBuild.currentResult ?: 'UNKNOWN' }
 
       withCredentials([
@@ -403,8 +420,11 @@ docker push $TARGET
         string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
       ]) {
         script {
+          // pequeno delay para evitar "Too many emails per second"
+          sleep time: 3, unit: 'SECONDS'
           if (isUnix()) {
-            sh '''
+            retry(2) {
+              def rc = sh(returnStatus: true, script: '''
 set -e
 STATUS="${CI_STATUS}"
 REPO="$(git config --get remote.origin.url || echo unknown)"
@@ -416,10 +436,13 @@ docker run --rm -v "$PWD:/app" -w /app \
   -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
   python:3.13-slim python scripts/notify.py \
     --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-'''
+''')
+              if (rc != 0) { echo "[notify] aviso: email final falhou (rc=${rc}), seguindo..." ; sleep 2 }
+            }
           } else {
-            powershell '''
-$ErrorActionPreference = "Stop"
+            retry(2) {
+              def rc = powershell(returnStatus: true, script: '''
+$ErrorActionPreference = "Continue"
 $STATUS = if ($Env:CI_STATUS) { $Env:CI_STATUS } else { "UNKNOWN" }
 $REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
 $BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
@@ -441,7 +464,10 @@ $args = @(
   '--branch', $BRANCH
 )
 & docker @args
-'''
+exit $LASTEXITCODE
+''')
+              if (rc != 0) { echo "[notify] aviso: email final falhou (rc=${rc}), seguindo..." ; sleep 2 }
+            }
           }
         }
       }
