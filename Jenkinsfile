@@ -3,7 +3,6 @@ pipeline {
 
   options {
     timestamps()
-    ansiColor('xterm')
     buildDiscarder(logRotator(numToKeepStr: '20'))
     disableConcurrentBuilds()
   }
@@ -55,7 +54,6 @@ pipeline {
             script {
               catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                 withCredentials([
-                  // variáveis da app (sem hardcode)
                   string(credentialsId: 'app-secret-key', variable: 'SECRET_KEY'),
                   string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
                 ]) {
@@ -73,7 +71,6 @@ pipeline {
                       docker exec ci-db pg_isready -U ${PGUSER} -d ${PGDB} && break || sleep 1
                     done
 
-                    # roda pytest na SUA imagem, conectando ao DB da rede ci_net
                     docker run --rm --network ci_net \
                       -e POSTGRES_SERVER=${PGHOST} -e POSTGRES_HOST=${PGHOST} \
                       -e POSTGRES_USER=${PGUSER} -e POSTGRES_PASSWORD=${PGPASS} -e POSTGRES_DB=${PGDB} \
@@ -136,7 +133,7 @@ pipeline {
       when {
         allOf {
           expression { return params.ENABLE_GH_RELEASE }
-          expression { return env.BRANCH == 'feat/CICD/Jenkins' }  // roda só nessa branch
+          expression { return env.BRANCH == 'feat/CICD/Jenkins' }
         }
       }
       steps {
@@ -163,7 +160,6 @@ pipeline {
           def testsStatus   = readFile('status_tests.txt').trim()
           def packageStatus = readFile('status_package.txt').trim()
           withCredentials([
-            // Mailtrap SMTP e destinatário
             usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
             string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
           ]) {
