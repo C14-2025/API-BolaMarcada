@@ -167,18 +167,7 @@ pipeline {
           withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
             bat """
               @echo on
-              docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "
-                set -e
-                apk add --no-cache bash curl jq
-                if [ -f scripts/upload_github_release.sh ]; then
-                  # copia para /tmp e remove CRLF sem tocar no volume do Windows
-                  tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh
-                  chmod +x /tmp/gh_release.sh
-                  GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=ci-%COMMIT% ASSET_PATH=%IMAGE_TAR% bash /tmp/gh_release.sh
-                else
-                  echo 'scripts/upload_github_release.sh não encontrado, pulando.'
-                fi
-              "
+              docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "set -e; apk add --no-cache bash curl jq; if [ -f scripts/upload_github_release.sh ]; then tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh; chmod +x /tmp/gh_release.sh; GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=ci-%COMMIT% ASSET_PATH=%IMAGE_TAR% bash /tmp/gh_release.sh; else echo 'scripts/upload_github_release.sh nao encontrado, pulando.'; fi"
             """
           }
         }
@@ -197,7 +186,7 @@ pipeline {
           }
           if (!fileExists('scripts/notify_email.py')) {
             writeFile file: 'scripts/notify_email.py', text: '''
-import os, smtplib, socket
+import os, smtplib, socket, ssl
 from email.message import EmailMessage
 
 to_email   = os.environ.get("TO_EMAIL", "")
@@ -232,12 +221,19 @@ msg["From"] = from_email
 msg["To"] = to_email
 msg.set_content(body)
 
-with smtplib.SMTP(smtp_host, smtp_port) as s:
+ctx = ssl.create_default_context()
+with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as s:
+    s.ehlo()
+    try:
+        s.starttls(context=ctx)
+        s.ehlo()
+    except Exception as e:
+        print("WARN: STARTTLS não disponível ou falhou:", e)
     if smtp_user or smtp_pass:
         s.login(smtp_user, smtp_pass)
     s.send_message(msg)
 print("Email enviado para", to_email)
-'''.trim() // <- usar trim() para evitar erro do sandbox
+'''.trim()
           }
 
           withCredentials([
@@ -260,7 +256,7 @@ print("Email enviado para", to_email)
                 -e GITHUB_RUN_ID=%BUILD_ID% ^
                 -e GITHUB_RUN_NUMBER=%BUILD_NUMBER% ^
                 -v "%cd%":/w -w /w python:3.12-alpine ^
-                python scripts/notify_email.py
+                sh -lc "apk add --no-cache ca-certificates && python scripts/notify_email.py"
             """
           }
         }
