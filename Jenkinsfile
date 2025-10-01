@@ -155,38 +155,24 @@ pipeline {
       } // parallel
     }
 
-   stage('Upload GitHub Release (opcional)') {
-  when {
-    allOf {
-      expression { return params.ENABLE_GH_RELEASE }
-      expression { return env.BRANCH == 'feat/CICD/Jenkins' }
-    }
-  }
-  steps {
-    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-      withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
-        bat '''
-          @echo on
-          set "TAG=ci-%COMMIT%"
-          docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "
-            set -e
-            apk add --no-cache bash curl jq
-            if [ -f scripts/upload_github_release.sh ]; then
-              # converte CRLF sem tocar no volume do Windows
-              tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh
-              chmod +x /tmp/gh_release.sh
-              GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=%TAG% ASSET_PATH=%IMAGE_TAR% bash /tmp/gh_release.sh
-            else
-              echo 'scripts/upload_github_release.sh não encontrado, pulando.'
-            fi
-          "
-        '''
+    stage('Upload GitHub Release (opcional)') {
+      when {
+        allOf {
+          expression { return params.ENABLE_GH_RELEASE }
+          expression { return env.BRANCH == 'feat/CICD/Jenkins' }
+        }
+      }
+      steps {
+        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+          withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
+            bat """
+              @echo on
+              docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "set -e; apk add --no-cache bash curl jq; if [ -f scripts/upload_github_release.sh ]; then tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh; chmod +x /tmp/gh_release.sh; GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=ci-%COMMIT% ASSET_PATH=%IMAGE_TAR% bash /tmp/gh_release.sh; else echo 'scripts/upload_github_release.sh nao encontrado, pulando.'; fi"
+            """
+          }
+        }
       }
     }
-  }
-}
-
-
 
     stage('Notificação') {
       steps {
