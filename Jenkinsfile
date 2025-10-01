@@ -3,233 +3,127 @@ pipeline {
 
   options {
     timestamps()
+    ansiColor('xterm')
     buildDiscarder(logRotator(numToKeepStr: '20'))
-    timeout(time: 45, unit: 'MINUTES')
+    disableConcurrentBuilds()
+  }
+
+  parameters {
+    booleanParam(name: 'ENABLE_GH_RELEASE', defaultValue: true, description: 'Publicar image-<commit>.tar como asset em um Release do GitHub')
   }
 
   environment {
-    DOCKER_BUILDKIT = '1'
-    IMAGE_NAME = 'ci-api'
-    IMAGE_TAG  = ''                 // setado no Checkout (fallback no build)
-    SMTP_HOST  = 'smtp.mailtrap.io'
-    SMTP_PORT  = '2525'
-    REPO_SLUG  = 'C14-2025/API-BolaMarcada'
+    // DB para testes
+    PGUSER   = 'postgres'
+    PGPASS   = 'postgres'
+    PGDB     = 'bolamarcadadb'
+    PGHOST   = 'ci-db'
+    PGPORT   = '55432'
 
-    POSTGRES_SERVER = credentials('postgres-server')
-    POSTGRES_DB     = credentials('postgres-dbname')
-    SECRET_KEY      = credentials('app-secret-key')
-    ACCESS_TOKEN_EXPIRE_MINUTES = credentials('access-token-expire')
-    DB = credentials('pg-db') // cria DB_USR e DB_PSW
+    // Relatórios/artefatos
+    JUNIT_XML    = 'report-junit.xml'
+    COVERAGE_XML = 'coverage.xml'
   }
 
   stages {
-    stage('Checkout') {
+    stage('Checkout & Vars') {
       steps {
         checkout scm
         script {
-          if (isUnix()) {
-            env.GIT_SHORT = sh(script: 'git rev-parse --short=8 HEAD || echo local', returnStdout: true).trim()
-          } else {
-            env.GIT_SHORT = powershell(script: '''
-$ErrorActionPreference = "Stop"
-$git = git rev-parse --short=8 HEAD 2>$null
-if ([string]::IsNullOrWhiteSpace($git)) { $git = 'local' }
-$git
-''', returnStdout: true).trim()
-          }
-          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_SHORT}"
-          echo "[ci] IMAGE_TAG=${env.IMAGE_TAG ?: 'null'}"
+          env.COMMIT     = sh(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim()
+          env.IMAGE      = "app:${env.COMMIT}"
+          env.IMAGE_TAR  = "image-${env.COMMIT}.tar"
+          env.BRANCH     = env.BRANCH_NAME ?: sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
         }
       }
     }
 
-    stage('Prechecks') {
+    stage('Build image') {
       steps {
-        script {
-          fileExists('Dockerfile')
-          fileExists('docker-compose.yml')
-        }
+        sh '''
+          set -eux
+          docker build --pull -t ${IMAGE} -t app:latest .
+        '''
       }
     }
 
-    stage('Compose override (CI)') {
-      steps {
-        script {
-          if (isUnix()) {
-            sh '''
-cat > docker-compose.ci.yml <<'YAML'
-services:
-  db:
-    env_file: []            # remove dependência de .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports: []               # não expõe porta no agente CI
-  api:
-    env_file: []
-    environment:
-      SECRET_KEY: ${SECRET_KEY}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
-      POSTGRES_SERVER: ${POSTGRES_SERVER}
-      POSTGRES_HOST: ${POSTGRES_SERVER}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-YAML
-'''
-          } else {
-            powershell '''
-$override = @'
-services:
-  db:
-    env_file: []
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports: []
-  api:
-    env_file: []
-    environment:
-      SECRET_KEY: ${SECRET_KEY}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
-      POSTGRES_SERVER: ${POSTGRES_SERVER}
-      POSTGRES_HOST: ${POSTGRES_SERVER}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-'@
-[System.IO.File]::WriteAllText((Join-Path $Env:WORKSPACE "docker-compose.ci.yml"), $override)
-'''
-          }
-        }
-      }
-    }
-
-    stage('Testes (pytest)') {
-      steps {
-        script {
-          if (isUnix()) {
-            sh '''
-set -e
-mkdir -p reports artifacts
-export COMPOSE_PROJECT_NAME="fastapi-ci-${BUILD_NUMBER}"
-export POSTGRES_USER="$DB_USR"
-export POSTGRES_PASSWORD="$DB_PSW"
-
-compose_cmd="docker compose"
-if ! docker compose version >/dev/null 2>&1; then
-  if command -v docker-compose >/dev/null 2>&1; then compose_cmd="docker-compose"; fi
-fi
-
-cleanup() { $compose_cmd -f docker-compose.yml -f docker-compose.ci.yml down -v || true; }
-trap cleanup EXIT
-
-$compose_cmd -f docker-compose.yml -f docker-compose.ci.yml up -d db
-$compose_cmd -f docker-compose.yml -f docker-compose.ci.yml run --rm api bash -lc 'tr -d "\\r" < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh'
-'''
-          } else {
-            powershell '''
-$ErrorActionPreference = "Stop"
-New-Item -ItemType Directory -Force -Path "reports" | Out-Null
-New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
-$Env:COMPOSE_PROJECT_NAME = "fastapi-ci-$Env:BUILD_NUMBER"
-
-$Env:POSTGRES_USER     = $Env:DB_USR
-$Env:POSTGRES_PASSWORD = $Env:DB_PSW
-
-$dc  = Join-Path $Env:WORKSPACE 'docker-compose.yml'
-$ci  = Join-Path $Env:WORKSPACE 'docker-compose.ci.yml'
-
-& docker compose -f $dc -f $ci up -d db
-
-try {
-  $cmdStr = "tr -d '\r' < scripts/run_tests.sh > /tmp/run_tests.sh && chmod +x /tmp/run_tests.sh && /tmp/run_tests.sh"
-  & docker compose -f $dc -f $ci run --rm api bash -lc $cmdStr
-}
-finally {
-  try { & docker compose -f $dc -f $ci down -v } catch { Write-Warning "down falhou: $($_.Exception.Message)" }
-}
-'''
-          }
-        }
-      }
-      post {
-        always {
-          junit allowEmptyResults: true, testResults: 'reports/junit.xml'
-          archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
-        }
-      }
-    }
-
-    stage('Paralelo: Empacotamento + Notificação') {
+    stage('CI (parallel)') {
+      failFast false
       parallel {
-        stage('Empacotamento (Docker)') {
+        stage('Testes') {
           steps {
             script {
-              if (isUnix()) {
-                sh '''
-set -e
-mkdir -p artifacts
-if [ -z "${IMAGE_TAG}" ]; then export IMAGE_TAG="${BUILD_NUMBER}-local"; fi
-docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .
-docker image ls ${IMAGE_NAME}:${IMAGE_TAG}
-docker save -o artifacts/${IMAGE_NAME}_${IMAGE_TAG}.tar ${IMAGE_NAME}:${IMAGE_TAG}
-'''
-              } else {
-                powershell '''
-$ErrorActionPreference = "Stop"
-New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
-if ([string]::IsNullOrWhiteSpace($Env:IMAGE_TAG)) { $Env:IMAGE_TAG = "$($Env:BUILD_NUMBER)-local" }
-$tag = "$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)"
-$archive = "artifacts/$($Env:IMAGE_NAME)_$($Env:IMAGE_TAG).tar"
-docker build -t "$tag" -f Dockerfile .
-docker image ls "$tag"
-docker save -o "$archive" "$tag"
-'''
+              catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                withCredentials([
+                  // variáveis da app (sem hardcode)
+                  string(credentialsId: 'app-secret-key', variable: 'SECRET_KEY'),
+                  string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
+                ]) {
+                  sh """
+                    set -eux
+
+                    docker network create ci_net || true
+
+                    docker rm -f ci-db || true
+                    docker run -d --name ci-db --network ci_net \
+                      -e POSTGRES_USER=${PGUSER} -e POSTGRES_PASSWORD=${PGPASS} -e POSTGRES_DB=${PGDB} \
+                      -p ${PGPORT}:5432 postgres:17-alpine
+
+                    for i in \$(seq 1 60); do
+                      docker exec ci-db pg_isready -U ${PGUSER} -d ${PGDB} && break || sleep 1
+                    done
+
+                    # roda pytest na SUA imagem, conectando ao DB da rede ci_net
+                    docker run --rm --network ci_net \
+                      -e POSTGRES_SERVER=${PGHOST} -e POSTGRES_HOST=${PGHOST} \
+                      -e POSTGRES_USER=${PGUSER} -e POSTGRES_PASSWORD=${PGPASS} -e POSTGRES_DB=${PGDB} \
+                      -e DATABASE_URL=postgresql+psycopg2://${PGUSER}:${PGPASS}@${PGHOST}:5432/${PGDB} \
+                      -e SECRET_KEY="\${SECRET_KEY}" \
+                      -e ACCESS_TOKEN_EXPIRE_MINUTES="\${ACCESS_TOKEN_EXPIRE_MINUTES}" \
+                      -v "\$PWD":/workspace -w /app ${IMAGE} \
+                      sh -c "pytest -q --junit-xml=/workspace/${JUNIT_XML} --cov=. --cov-report=xml:/workspace/${COVERAGE_XML}"
+
+                    echo SUCCESS > status_tests.txt
+                  """
+                }
               }
             }
-            archiveArtifacts artifacts: 'artifacts/*.tar', onlyIfSuccessful: true
+          }
+          post {
+            always {
+              junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
+              archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
+              sh '''
+                docker rm -f ci-db || true
+                docker network rm ci_net || true
+              '''
+              script {
+                if (!fileExists('status_tests.txt')) {
+                  writeFile file: 'status_tests.txt', text: 'FAILURE'
+                }
+              }
+            }
           }
         }
 
-        stage('Notificação (paralela)') {
+        stage('Empacotamento') {
           steps {
-            withCredentials([
-              usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
-              string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
-            ]) {
+            script {
+              catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                sh """
+                  set -eux
+                  docker save ${IMAGE} -o ${IMAGE_TAR}
+                  echo SUCCESS > status_package.txt
+                """
+              }
+            }
+          }
+          post {
+            always {
+              archiveArtifacts allowEmptyArchive: true, artifacts: "${IMAGE_TAR}"
               script {
-                if (isUnix()) {
-                  sh '''
-set -e
-STATUS="IN_PROGRESS"
-REPO="$(git config --get remote.origin.url || echo unknown)"
-BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
-RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
-
-docker run --rm -v "$PWD:/app" -w /app \
-  -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
-  -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
-  python:3.13-slim python scripts/notify.py \
-    --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-'''
-                } else {
-                  powershell '''
-$ErrorActionPreference = "Stop"
-$STATUS = "IN_PROGRESS"
-$REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
-$BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
-$RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
-
-$volume = "$($Env:WORKSPACE):/app"
-docker run --rm -v $volume -w /app `
-  -e SMTP_HOST=$Env:SMTP_HOST -e SMTP_PORT=$Env:SMTP_PORT `
-  -e SMTP_USER=$Env:SMTP_USER -e SMTP_PASS=$Env:SMTP_PASS -e EMAIL_TO=$Env:EMAIL_TO `
-  python:3.13-slim python scripts/notify.py `
-    --status $STATUS --run-id $RUNID --repo $REPO --branch $BRANCH
-'''
+                if (!fileExists('status_package.txt')) {
+                  writeFile file: 'status_package.txt', text: 'FAILURE'
                 }
               }
             }
@@ -238,120 +132,59 @@ docker run --rm -v $volume -w /app `
       }
     }
 
-    stage('Publicar artefatos no GitHub') {
-      steps {
-        script { env.CI_STATUS = env.CI_STATUS ?: (currentBuild.currentResult ?: 'IN_PROGRESS') }
-        withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-          script {
-            if (isUnix()) {
-              sh '''
-set -e
-TAG="build-${BUILD_NUMBER}-${GIT_SHORT}"
-OWNER="${REPO_SLUG%%/*}"
-
-{
-  echo "status=${CI_STATUS}"
-  echo "image=${IMAGE_NAME}:${IMAGE_TAG}"
-  echo "repo=${REPO_SLUG}"
-  echo "commit=${GIT_SHORT}"
-  echo "run=${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
-} > build-info.txt
-
-echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
-
-docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-  gh release create "$TAG" build-info.txt \
-  --repo "${REPO_SLUG}" \
-  --title "Build ${BUILD_NUMBER} (${GIT_SHORT})" \
-  --notes "Artefatos do Jenkins. Imagem Docker: ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}" \
-|| docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-  gh release upload "$TAG" build-info.txt --repo "${REPO_SLUG}" --clobber
-
-# envia junit se existir
-if [ -f reports/junit.xml ]; then
-  docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-    gh release upload "$TAG" reports/junit.xml --repo "${REPO_SLUG}" --clobber
-fi
-
-# envia .tar se existir
-set -- artifacts/*.tar; if [ -e "$1" ]; then
-  docker run --rm -v "$PWD:/w" -w /w -e GH_TOKEN="$GITHUB_TOKEN" ghcr.io/cli/cli:latest \
-    gh release upload "$TAG" "$@" --repo "${REPO_SLUG}" --clobber
-fi
-'''
-            } else {
-              powershell '''
-$ErrorActionPreference = "Stop"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ProgressPreference = 'SilentlyContinue'
-
-$TAG   = "build-$($Env:BUILD_NUMBER)-$($Env:GIT_SHORT)"
-$owner = $Env:REPO_SLUG.Split('/')[0]
-
-# build-info.txt
-$lines = @(
-  "status=$($Env:CI_STATUS)",
-  "image=$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)",
-  "repo=$($Env:REPO_SLUG)",
-  "commit=$($Env:GIT_SHORT)",
-  "run=$($Env:BUILD_URL)"
-)
-[IO.File]::WriteAllLines((Join-Path $Env:WORKSPACE 'build-info.txt'), $lines)
-
-# login pra puxar ghcr.io/cli/cli
-docker login ghcr.io -u $Env:GH_USER -p $Env:GITHUB_TOKEN | Out-Null
-$volume = "$($Env:WORKSPACE):/w"
-
-# cria release (ou usa existente)
-docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
-  gh release create $TAG build-info.txt `
-  --repo $Env:REPO_SLUG `
-  --title "Build $($Env:BUILD_NUMBER) ($($Env:GIT_SHORT))" `
-  --notes "Artefatos do Jenkins. Imagem Docker: ghcr.io/$owner/ci-api:$($Env:IMAGE_TAG)" `
-  2>$null
-
-if ($LASTEXITCODE -ne 0) {
-  docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
-    gh release upload $TAG build-info.txt --repo $Env:REPO_SLUG --clobber
-}
-
-if (Test-Path 'reports/junit.xml') {
-  docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
-    gh release upload $TAG reports/junit.xml --repo $Env:REPO_SLUG --clobber
-}
-
-$tarFiles = Get-ChildItem -Path "artifacts" -Filter *.tar -ErrorAction SilentlyContinue
-foreach ($tar in $tarFiles) {
-  $rel = "artifacts/" + $tar.Name
-  docker run --rm -v $volume -w /w -e GH_TOKEN=$Env:GITHUB_TOKEN ghcr.io/cli/cli:latest `
-    gh release upload $TAG $rel --repo $Env:REPO_SLUG --clobber
-}
-'''
-            }
-          }
+    stage('Upload GitHub Release (opcional)') {
+      when {
+        allOf {
+          expression { return params.ENABLE_GH_RELEASE }
+          expression { return env.BRANCH == 'feat/CICD/Jenkins' }  // roda só nessa branch
         }
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
+          sh """
+            set -eux
+            chmod +x scripts/upload_github_release.sh
+            docker run --rm -v "\$PWD":/w -w /w alpine:3.20 sh -c '
+              apk add --no-cache curl jq
+              GITHUB_TOKEN="\${GH_PAT}" \
+              GITHUB_REPO="C14-2025/API-BolaMarcada" \
+              TAG="ci-${COMMIT}" \
+              ASSET_PATH="${IMAGE_TAR}" \
+              scripts/upload_github_release.sh
+            '
+          """
+        }
+      }
+    }
 
-        withCredentials([usernamePassword(credentialsId: 'ghcr-cred', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
-          script {
-            if (isUnix()) {
-              sh '''
-set -e
-OWNER="${REPO_SLUG%%/*}"
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-TARGET="ghcr.io/${OWNER}/ci-api:${IMAGE_TAG}"
-docker tag ${IMAGE_NAME}:${IMAGE_TAG} "$TARGET"
-docker push "$TARGET"
-'''
-            } else {
-              powershell '''
-$ErrorActionPreference = "Stop"
-$OWNER  = $Env:REPO_SLUG.Split('/')[0]
-$TARGET = "ghcr.io/$OWNER/ci-api:$($Env:IMAGE_TAG)"
-$Env:GHCR_TOKEN | docker login ghcr.io -u $Env:GHCR_USER --password-stdin
-docker tag "$($Env:IMAGE_NAME):$($Env:IMAGE_TAG)" $TARGET
-docker push $TARGET
-'''
-            }
+    stage('Notificação') {
+      steps {
+        script {
+          def testsStatus   = readFile('status_tests.txt').trim()
+          def packageStatus = readFile('status_package.txt').trim()
+          withCredentials([
+            // Mailtrap SMTP e destinatário
+            usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
+            string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
+          ]) {
+            sh """
+              set -eux
+              docker run --rm \
+                -e TO_EMAIL="\${TO_EMAIL}" \
+                -e SMTP_SERVER="smtp.mailtrap.io" \
+                -e SMTP_PORT="2525" \
+                -e FROM_EMAIL="" \
+                -e SMTP_USERNAME="\${SMTP_USERNAME}" \
+                -e SMTP_PASSWORD="\${SMTP_PASSWORD}" \
+                -e TESTS_STATUS="${testsStatus}" \
+                -e PACKAGE_STATUS="${packageStatus}" \
+                -e GIT_SHA="${COMMIT}" \
+                -e GIT_BRANCH="${BRANCH}" \
+                -e GITHUB_RUN_ID="${env.BUILD_ID}" \
+                -e GITHUB_RUN_NUMBER="${env.BUILD_NUMBER}" \
+                -v "\$PWD":/w -w /w python:3.12-alpine \
+                python scripts/notify_email.py
+            """
           }
         }
       }
@@ -360,60 +193,7 @@ docker push $TARGET
 
   post {
     always {
-      script { env.CI_STATUS = currentBuild.currentResult ?: 'UNKNOWN' }
-
-      withCredentials([
-        usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USER', passwordVariable: 'SMTP_PASS'),
-        string(credentialsId: 'EMAIL_TO', variable: 'EMAIL_TO')
-      ]) {
-        script {
-          if (isUnix()) {
-            sh '''
-set -e
-STATUS="${CI_STATUS}"
-REPO="$(git config --get remote.origin.url || echo unknown)"
-BRANCH="$(git rev-parse --abbrev-ref HEAD || echo unknown)"
-RUNID="${BUILD_URL:-${JOB_NAME}#${BUILD_NUMBER}}"
-
-# anti-rate-limit: pequeno atraso se acabou de enviar em paralelo
-sleep 3
-
-docker run --rm -v "$PWD:/app" -w /app \
-  -e SMTP_HOST="${SMTP_HOST}" -e SMTP_PORT="${SMTP_PORT}" \
-  -e SMTP_USER="$SMTP_USER" -e SMTP_PASS="$SMTP_PASS" -e EMAIL_TO="$EMAIL_TO" \
-  python:3.13-slim python scripts/notify.py \
-    --status "$STATUS" --run-id "$RUNID" --repo "$REPO" --branch "$BRANCH"
-'''
-          } else {
-            powershell '''
-$ErrorActionPreference = "Stop"
-Start-Sleep -Seconds 3
-$STATUS = if ($Env:CI_STATUS) { $Env:CI_STATUS } else { "UNKNOWN" }
-$REPO = git config --get remote.origin.url 2>$null; if ([string]::IsNullOrWhiteSpace($REPO)) { $REPO = 'unknown' }
-$BRANCH = git rev-parse --abbrev-ref HEAD 2>$null; if ([string]::IsNullOrWhiteSpace($BRANCH)) { $BRANCH = 'unknown' }
-$RUNID = if ($Env:BUILD_URL) { $Env:BUILD_URL } else { "${JOB_NAME}#${BUILD_NUMBER}" }
-
-$volume = "$($Env:WORKSPACE):/app"
-docker run --rm -v $volume -w /app `
-  -e SMTP_HOST=$Env:SMTP_HOST -e SMTP_PORT=$Env:SMTP_PORT `
-  -e SMTP_USER=$Env:SMTP_USER -e SMTP_PASS=$Env:SMTP_PASS -e EMAIL_TO=$Env:EMAIL_TO `
-  python:3.13-slim python scripts/notify.py `
-    --status $STATUS --run-id $RUNID --repo $REPO --branch $BRANCH
-'''
-          }
-        }
-      }
-
-      script {
-        if (isUnix()) {
-          sh 'docker system prune -f || true'
-        } else {
-          powershell '''
-$ErrorActionPreference = "SilentlyContinue"
-try { docker system prune -f | Out-Null } catch { Write-Warning "limpeza docker falhou: $($_.Exception.Message)" }
-'''
-        }
-      }
+      echo "Pipeline finalizado."
     }
   }
 }
