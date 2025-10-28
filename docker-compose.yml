@@ -1,3 +1,4 @@
+
 services:
   db:
     image: postgres:17-alpine
@@ -6,26 +7,37 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-bolamarcadadb}
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U $$POSTGRES_USER"]
+      test: ["CMD-SHELL","pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1"]
       interval: 5s
       timeout: 5s
       retries: 20
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
 
   api:
     build:
       context: .
-      dockerfile: Dockerfile       # opcional; o último estágio já é o runtime
+      dockerfile: Dockerfile
     depends_on:
       db:
         condition: service_healthy
+    entrypoint: ["/app/docker-entrypoint.sh"]
     env_file:
-      - .env                  # se você já usa .env local
+      - .env
     environment:
-      POSTGRES_HOST: db       # garante host correto no container
+      # host/porta do DB dentro da rede do compose:
+      POSTGRES_HOST: db
       POSTGRES_SERVER: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-bolamarcadadb}
+      # URL completa p/ SQLAlchemy (psycopg2):
+      DATABASE_URL: "postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-bolamarcadadb}"
     ports:
       - "8000:8000"
-    command: ["/wait-for-it.sh","db:5432","-t","30","--",
-              "uvicorn","main:app","--host","0.0.0.0","--port","8000"]
+
+volumes:
+  pgdata:
