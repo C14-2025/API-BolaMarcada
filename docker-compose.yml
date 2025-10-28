@@ -11,13 +11,12 @@ services:
       timeout: 5s
       retries: 20
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
 
   api:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: runtime         # opcional; o último estágio já é o runtime
+      dockerfile: Dockerfile       # opcional; o último estágio já é o runtime
     depends_on:
       db:
         condition: service_healthy
