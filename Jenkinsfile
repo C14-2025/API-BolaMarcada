@@ -48,8 +48,10 @@ pipeline {
           env.IMAGE     = "app:${env.COMMIT}"
           env.IMAGE_TAR = "image-${env.COMMIT}.tar"
 
-          // === NOVO: TAG único por build (evita colar em release antiga)
+          // TAG único por build (evita colar em release antiga)
           env.CI_TAG = "ci-${env.BUILD_NUMBER}-${env.COMMIT}"
+
+          echo "BRANCH=${env.BRANCH}  CI_TAG=${env.CI_TAG}  COMMIT=${env.COMMIT}"
         }
       }
     }
@@ -161,8 +163,9 @@ pipeline {
     stage('Upload GitHub Release (opcional)') {
       when {
         allOf {
-          expression { return params.ENABLE_GH_RELEASE }
-          expression { return env.BRANCH == 'feat/CICD/Jenkins' }
+          expression { params.ENABLE_GH_RELEASE as boolean }
+          // Libera para feat/CI/Docker, feat/CICD/Jenkins, main, master e release/*
+          expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+)/ }
         }
       }
       steps {
@@ -246,16 +249,18 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
 
     stage('Notificação') {
       steps {
-        script {
-          def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
-          def packageStatus = fileExists('status_package.txt') ? readFile('status_package.txt').trim() : 'FAILURE'
+        // Não quebrar o pipeline se o SMTP falhar
+        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+          script {
+            def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
+            def packageStatus = fileExists('status_package.txt') ? readFile('status_package.txt').trim() : 'FAILURE'
 
-          // garante o script de notificação caso não exista no repo
-          if (!fileExists('scripts')) {
-            bat 'mkdir scripts 2>nul'
-          }
-          if (!fileExists('scripts/notify_email.py')) {
-            writeFile file: 'scripts/notify_email.py', text: '''
+            // garante o script de notificação caso não exista no repo
+            if (!fileExists('scripts')) {
+              bat 'mkdir scripts 2>nul'
+            }
+            if (!fileExists('scripts/notify_email.py')) {
+              writeFile file: 'scripts/notify_email.py', text: '''
 import os, smtplib, socket, ssl
 from email.message import EmailMessage
 
@@ -304,30 +309,31 @@ with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as s:
     s.send_message(msg)
 print("Email enviado para", to_email)
 '''.trim()
-          }
+            }
 
-          withCredentials([
-            usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
-            string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
-          ]) {
-            bat """
-              @echo on
-              docker run --rm ^
-                -e TO_EMAIL=%TO_EMAIL% ^
-                -e SMTP_SERVER=smtp.mailtrap.io ^
-                -e SMTP_PORT=2525 ^
-                -e FROM_EMAIL=ci@jenkins.local ^
-                -e SMTP_USERNAME=%SMTP_USERNAME% ^
-                -e SMTP_PASSWORD=%SMTP_PASSWORD% ^
-                -e TESTS_STATUS=${testsStatus} ^
-                -e PACKAGE_STATUS=${packageStatus} ^
-                -e GIT_SHA=%COMMIT% ^
-                -e GIT_BRANCH=%BRANCH% ^
-                -e GITHUB_RUN_ID=%BUILD_ID% ^
-                -e GITHUB_RUN_NUMBER=%BUILD_NUMBER% ^
-                -v "%cd%":/w -w /w python:3.12-alpine ^
-                sh -lc "apk add --no-cache ca-certificates && python scripts/notify_email.py"
-            """
+            withCredentials([
+              usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
+              string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
+            ]) {
+              bat """
+                @echo on
+                docker run --rm ^
+                  -e TO_EMAIL=%TO_EMAIL% ^
+                  -e SMTP_SERVER=smtp.mailtrap.io ^
+                  -e SMTP_PORT=2525 ^
+                  -e FROM_EMAIL=ci@jenkins.local ^
+                  -e SMTP_USERNAME=%SMTP_USERNAME% ^
+                  -e SMTP_PASSWORD=%SMTP_PASSWORD% ^
+                  -e TESTS_STATUS=${testsStatus} ^
+                  -e PACKAGE_STATUS=${packageStatus} ^
+                  -e GIT_SHA=%COMMIT% ^
+                  -e GIT_BRANCH=%BRANCH% ^
+                  -e GITHUB_RUN_ID=%BUILD_ID% ^
+                  -e GITHUB_RUN_NUMBER=%BUILD_NUMBER% ^
+                  -v "%cd%":/w -w /w python:3.12-alpine ^
+                  sh -lc "apk add --no-cache ca-certificates && python scripts/notify_email.py"
+              """
+            }
           }
         }
       }
