@@ -1,47 +1,58 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${GITHUB_TOKEN:?Defina GITHUB_TOKEN}"
-: "${GITHUB_REPO:?Ex: C14-2025/API-BolaMarcada}"
-: "${TAG:?Ex: ci-<commit>}"
-: "${ASSET_PATH:?Caminho do arquivo .tar}"
+: "${GITHUB_TOKEN:?GITHUB_TOKEN ausente}"
+: "${GITHUB_REPO:?GITHUB_REPO ausente (owner/repo)}"
+: "${TAG:?TAG ausente}"
+: "${ASSET_PATH:?ASSET_PATH ausente}"
 
+if [ ! -f "$ASSET_PATH" ]; then
+  echo "ERRO: asset não encontrado: $ASSET_PATH" >&2
+  exit 2
+fi
+
+OWNER="${GITHUB_REPO%%/*}"
+REPO="${GITHUB_REPO##*/}"
 API="https://api.github.com"
+UPLOADS="https://uploads.github.com"
 
-# Verifica se já existe release para a TAG
+auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "User-Agent: jenkins-ci")
+
+echo "[gh] procurando release por tag: $TAG"
 set +e
-release_resp=$(curl -sS -H "Authorization: token ${GITHUB_TOKEN}" \
-  "${API}/repos/${GITHUB_REPO}/releases/tags/${TAG}")
-exists_code=$?
+resp=$(curl -sS "${auth[@]}" "$API/repos/$OWNER/$REPO/releases/tags/$TAG")
 set -e
 
-if echo "$release_resp" | jq -e '.id' >/dev/null 2>&1; then
-  release_id=$(echo "$release_resp" | jq -r '.id')
+if echo "$resp" | jq -e .id >/dev/null 2>&1; then
+  RELEASE_ID=$(echo "$resp" | jq -r .id)
+  echo "[gh] release existente id=$RELEASE_ID"
 else
-  # Cria release (prerelease)
-  release_id=$(curl -sS -X POST -H "Authorization: token ${GITHUB_TOKEN}" \
-    -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false,\"prerelease\":true}" \
-    "${API}/repos/${GITHUB_REPO}/releases" | jq -r '.id')
+  echo "[gh] criando release nova"
+  payload=$(jq -n --arg tag "$TAG" --arg name "$TAG" \
+    '{ tag_name: $tag, name: $name, draft: false, prerelease: false }')
+  resp=$(curl -sS "${auth[@]}" -X POST "$API/repos/$OWNER/$REPO/releases" -d "$payload")
+  if ! echo "$resp" | jq -e .id >/dev/null 2>&1; then
+    echo "ERRO ao criar release: $resp" >&2
+    exit 3
+  fi
+  RELEASE_ID=$(echo "$resp" | jq -r .id)
+  echo "[gh] release criada id=$RELEASE_ID"
 fi
 
-upload_url=$(curl -sS -H "Authorization: token ${GITHUB_TOKEN}" \
-  "${API}/repos/${GITHUB_REPO}/releases/${release_id}" | jq -r '.upload_url' | sed 's/{?name,label}//')
-
-fname=$(basename "${ASSET_PATH}")
-
-# Remove asset existente com mesmo nome (idempotência)
-assets=$(curl -sS -H "Authorization: token ${GITHUB_TOKEN}" \
-  "${API}/repos/${GITHUB_REPO}/releases/${release_id}/assets")
-asset_id=$(echo "$assets" | jq -r ".[] | select(.name==\"${fname}\") | .id")
+# Apaga asset com mesmo nome se já existir
+asset_name="$(basename "$ASSET_PATH")"
+assets=$(curl -sS "${auth[@]}" "$API/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets")
+asset_id=$(echo "$assets" | jq -r --arg n "$asset_name" '.[] | select(.name==$n) | .id' | head -n1)
 if [ -n "${asset_id:-}" ] && [ "$asset_id" != "null" ]; then
-  curl -sS -X DELETE -H "Authorization: token ${GITHUB_TOKEN}" \
-    "${API}/repos/${GITHUB_REPO}/releases/assets/${asset_id}" >/dev/null
+  echo "[gh] removendo asset existente id=$asset_id ($asset_name)"
+  curl -sS "${auth[@]}" -X DELETE "$API/repos/$OWNER/$REPO/releases/assets/$asset_id" >/dev/null
 fi
 
-# Upload
-curl -sS -H "Authorization: token ${GITHUB_TOKEN}" \
+echo "[gh] enviando asset: $asset_name"
+upload_url="$UPLOADS/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets?name=$(printf '%s' "$asset_name" | jq -sRr @uri)"
+curl -sS -X POST "${auth[@]}" \
   -H "Content-Type: application/octet-stream" \
-  --data-binary @"${ASSET_PATH}" \
-  "${upload_url}?name=${fname}" >/dev/null
+  --data-binary @"$ASSET_PATH" \
+  "$upload_url" >/dev/null
 
-echo "Asset enviado: ${fname} para release ${TAG}"
+echo "[gh] ok: release=$TAG asset=$asset_name"
