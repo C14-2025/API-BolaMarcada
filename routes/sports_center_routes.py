@@ -14,8 +14,9 @@ from services.sports_center_service import (
     get_sports_center_by_id_service,
     delete_sports_center_by_id,
     update_sports_center_service,
+    get_sports_center_by_city_service,
 )
-from utils.security import get_current_user
+import requests
 
 sports_center_router = APIRouter(prefix="/sports_center", tags=["sports_center"])
 
@@ -113,3 +114,37 @@ async def delete_sports_center(
         raise HTTPException(
             status_code=400, detail=f"Erro ao deletar centro esportivo: {str(e)}"
         )
+
+
+@sports_center_router.get("/city/{city_name}")
+async def get_sports_centers_by_city(
+    city_name: str, session: Session = Depends(get_db)
+):
+    try:
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {"city": city_name, "format": "json", "limit": 1}
+        response = requests.get(
+            url, params=params, headers={"User-Agent": "BolaMarcadaApp/1.0"}
+        )
+        data = response.json()
+
+        if not data:
+            raise HTTPException(status_code=404, detail="Cidade não encontrada.")
+
+        bbox = data[0]["boundingbox"]
+        lat_min, lat_max = float(bbox[0]), float(bbox[1])
+        lon_min, lon_max = float(bbox[2]), float(bbox[3])
+
+        results = get_sports_center_by_city_service(
+            session, lat_min, lat_max, lon_min, lon_max
+        )
+
+        if not results:
+            raise HTTPException(
+                status_code=404, detail="Nenhum centro encontrado nessa cidade."
+            )
+
+        return results
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar centros: {str(e)}")

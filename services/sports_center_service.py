@@ -22,18 +22,34 @@ def create_sports_center_service(db: Session, data: SportsCenterCreate) -> int:
     return new_sports_center.id
 
 
-def get_sports_center_by_id_service(db: Session, sports_center_id: int) -> SportsCenter | None:
+def get_sports_center_by_id_service(
+    db: Session, sports_center_id: int
+) -> SportsCenter | None:
     """Retorna um centro esportivo pelo ID, ou None se não existir."""
     return db.query(SportsCenter).filter_by(id=sports_center_id).first()
 
 
-def get_all_sports_centers_by_user_id_service(db: Session, owner_id: int) -> list[SportsCenter]:
+def get_all_sports_centers_by_user_id_service(
+    db: Session, owner_id: int
+) -> list[SportsCenter]:
     """Retorna todos os centros esportivos de um dono."""
     return db.query(SportsCenter).filter_by(user_id=owner_id).all()
 
 
+def get_sports_center_by_city_service(
+    session: Session, lat_min: float, lat_max: float, lon_min: float, lon_max: float
+):
+    """Retorna todos os centros esportivos em uma cidade."""
+    return (
+        session.query(SportsCenter)
+        .filter(SportsCenter.latitude.between(lat_min, lat_max))
+        .filter(SportsCenter.longitude.between(lon_min, lon_max))
+        .all()
+    )
+
+
 def update_sports_center_service(session, sports_center_id, update_data):
-    sports_center = get_sports_center_by_id(session, sports_center_id)
+    sports_center = get_sports_center_by_id_service(session, sports_center_id)
     if not sports_center:
         raise ValueError("Centro esportivo não encontrado.")
 
@@ -47,7 +63,7 @@ def update_sports_center_service(session, sports_center_id, update_data):
 
 def delete_sports_center_by_id(db: Session, sports_center_id: int) -> None:
     """Deleta um centro esportivo pelo ID. Lança ValueError se não existir."""
-    sports_center = get_sports_center_by_id(db, sports_center_id)
+    sports_center = get_sports_center_by_id_service(db, sports_center_id)
     if not sports_center:
         raise ValueError("Centro esportivo não encontrado")
 
