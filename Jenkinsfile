@@ -116,23 +116,24 @@ pipeline {
     }
   }
   post {
-    always {
-      junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
-      archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
-      bat '''
-        @echo off
-        docker rm -f ci-db 2>nul
-        docker network rm ci_net 2>nul
-      '''
-      script {
-        if (!fileExists('status_tests.txt')) {
-          writeFile file: 'status_tests.txt', text: 'FAILURE'
-        }
+  always {
+    junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
+    archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
+    bat '''
+      @echo off
+      rem -- cleanup tolerante a erros
+      docker rm -f ci-db 1>nul 2>nul || ver > nul
+      docker network rm ci_net 1>nul 2>nul || ver > nul
+    '''
+    script {
+      if (!fileExists('status_tests.txt')) {
+        writeFile file: 'status_tests.txt', text: 'FAILURE'
       }
     }
   }
 }
 
+        }
         stage('Empacotamento') {
           steps {
             script {
