@@ -99,7 +99,7 @@ pipeline {
                       -e DATABASE_URL=postgresql+psycopg2://%PGUSER%:%PGPASS%@%PGHOST%:5432/%PGDB% ^
                       -e SECRET_KEY=%SECRET_KEY% ^
                       -e ACCESS_TOKEN_EXPIRE_MINUTES=%ACCESS_TOKEN_EXPIRE_MINUTES% ^
-                      -v "%cd%":/workspace -w /app %IMAGE% ^
+                      -v "%cd%":/workspace -w / %IMAGE% ^
                       sh -lc "python -m pip install -q --disable-pip-version-check pytest pytest-cov && pytest -q --junit-xml=/workspace/%JUNIT_XML% --cov=. --cov-report=xml:/workspace/%COVERAGE_XML%"
 
                     set RC=%errorlevel%
