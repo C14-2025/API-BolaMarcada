@@ -1,6 +1,7 @@
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
+
 class FieldCreate(BaseModel):
     sports_center_id: int
     name: str
@@ -10,6 +11,7 @@ class FieldCreate(BaseModel):
     description: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)  # v2 (substitui class Config)
+
 
 class FieldUpdate(BaseModel):
     name: Optional[str] = None
