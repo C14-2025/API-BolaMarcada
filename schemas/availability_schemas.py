@@ -9,3 +9,11 @@ class AvailabilityCreate(BaseModel):
     end_time: datetime
 
     model_config = ConfigDict(from_attributes=True)
+    
+class AvailabilityUpdate(BaseModel):
+    field_id: int | None = None
+    day_of_week: int | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)

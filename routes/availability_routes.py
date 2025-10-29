@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from schemas.availability_schemas import AvailabilityCreate
+from schemas.availability_schemas import AvailabilityCreate, AvailabilityUpdate
 from services.availability_service import (
     create_availability_service,
     delete_availability_by_id,
@@ -40,6 +40,36 @@ async def get_availability(availability_id: int, session: Session = Depends(get_
 
     # Retorna os dados da disponibilidade
     return availability
+
+
+@availability_router.patch("/{availability_id}")
+async def update_availability(
+    availability_id: int,
+    availability_update: AvailabilityUpdate,
+    session: Session = Depends(get_db),
+):
+    try:
+        # Tenta buscar a disponibilidade existente
+        existing_availability = get_availability_by_id(session, availability_id)
+        if not existing_availability:
+            raise HTTPException(
+                status_code=404, detail="Disponibilidade não encontrada."
+            )
+
+        # Atualiza os campos da disponibilidade existente
+        for key, value in availability_update.dict(exclude_unset=True).items():
+            setattr(existing_availability, key, value)
+
+        session.commit()
+        session.refresh(existing_availability)
+        return {"message": "Disponibilidade atualizada com sucesso."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=400, detail=f"Erro ao atualizar disponibilidade: {str(e)}"
+        )
 
 
 @availability_router.delete("/{availability_id}")
