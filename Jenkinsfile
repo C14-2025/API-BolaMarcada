@@ -335,7 +335,7 @@ print("Email enviado para", to_email)
                   -e GITHUB_RUN_ID=$BUILD_ID \
                   -e GITHUB_RUN_NUMBER=$BUILD_NUMBER \
                   -v "/var/jenkins_home/workspace/bolamarcada:/app" -w /app python:3.12-alpine \
-                  sh -lc "apk add --no-cache ca-certificates && python /app/scripts/notify_email.py"
+                  sh -lc "apk add --no-cache ca-certificates && python /scripts/notify_email.py"
               """
             }
           }
