@@ -29,6 +29,7 @@ pipeline {
   }
 
   stages {
+
     stage('Checkout & Vars') {
       steps {
         checkout scm
@@ -48,7 +49,7 @@ pipeline {
           env.IMAGE     = "app:${env.COMMIT}"
           env.IMAGE_TAR = "image-${env.COMMIT}.tar"
 
-          // TAG único por build (evita colar em release antiga)
+          // TAG único por build
           env.CI_TAG = "ci-${env.BUILD_NUMBER}-${env.COMMIT}"
 
           echo "BRANCH=${env.BRANCH}  CI_TAG=${env.CI_TAG}  COMMIT=${env.COMMIT}"
@@ -59,9 +60,21 @@ pipeline {
     stage('Build image') {
       steps {
         sh '''
+          # Garante .dockerignore pra não mandar tarzão & cia pro build context
+          cat > .dockerignore <<'EOF'
+.git
+__pycache__/
+*.pyc
+artifacts/
+reports/
+image-*.tar
+${JUNIT_XML}
+${COVERAGE_XML}
+EOF
+
           echo "docker version"
           docker version
-          docker build --pull -t $IMAGE -t app:latest .
+          docker build --pull -t "$IMAGE" -t app:latest .
         '''
       }
     }
@@ -74,14 +87,15 @@ pipeline {
           steps {
             script {
               catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+
                 withCredentials([
                   string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
                   string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
                 ]) {
-                  // ====== sobe DB e espera ficar pronto (com timeout) ======
+
+                  // --- Network + DB
                   sh '''
                     set -eux
-
                     echo "rede dedicada"
                     docker network create ci_net || echo net exists
 
@@ -94,7 +108,6 @@ pipeline {
 
                   int waitRc = sh(returnStatus: true, script: '''
                     set -eux
-                    # passamos variáveis para o container que roda o pg_isready
                     docker run --rm --network ci_net \
                       -e PGUSER="$PGUSER" -e PGDB="$PGDB" -e PGPASSWORD="$PGPASS" \
                       postgres:17-alpine sh -lc '
@@ -110,29 +123,31 @@ pipeline {
                       '
                   ''')
                   if (waitRc != 0) {
-                    // ajuda a debugar caso o pg não suba
-                    sh 'docker logs ci-db || true'
+                    sh 'echo "--- LOGS DO POSTGRES ---"; docker logs ci-db || true'
                     error("Banco não ficou pronto (rc=${waitRc})")
                   }
 
-                  // ====== roda pytest dentro da imagem da aplicação ======
+                  // --- Testes (compartilhando o MESMO volume do container do Jenkins)
                   int rc = sh(returnStatus: true, script: '''
                     set -eux
                     docker run --rm --network ci_net \
-                      -e POSTGRES_SERVER="$PGHOST" -e POSTRES_HOST="$PGHOST" \
+                      --volumes-from "$(hostname)" \
+                      -w "$WORKSPACE" \
+                      -e POSTGRES_SERVER="$PGHOST" -e POSTGRES_HOST="$PGHOST" \
                       -e POSTGRES_USER="$PGUSER" -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB="$PGDB" \
                       -e DATABASE_URL="postgresql+psycopg2://$PGUSER:$PGPASS@$PGHOST:5432/$PGDB" \
                       -e SECRET_KEY="$SECRET_KEY" \
                       -e ACCESS_TOKEN_EXPIRE_MINUTES="$ACCESS_TOKEN_EXPIRE_MINUTES" \
-                      -e PYTHONPATH="/workspace" \
-                      -e JUNIT_XML="$JUNIT_XML" \
-                      -e COVERAGE_XML="$COVERAGE_XML" \
-                      -v "$PWD":/workspace -w /workspace "$IMAGE" \
-                      sh -lc '
+                      -e JUNIT_XML="$JUNIT_XML" -e COVERAGE_XML="$COVERAGE_XML" \
+                      "$IMAGE" sh -lc '
                         set -eux
                         python -m pip install --disable-pip-version-check -U pip
                         python -m pip install pytest pytest-cov
-                        pytest -vv /workspace/tests --junit-xml="/workspace/$JUNIT_XML" --cov="/workspace" --cov-report=xml:"/workspace/$COVERAGE_XML"
+                        # já estamos no $WORKSPACE
+                        pytest -vv tests \
+                          --junit-xml="$JUNIT_XML" \
+                          --cov=. \
+                          --cov-report=xml:"$COVERAGE_XML"
                       '
                   ''')
                   if (rc == 0) {
@@ -151,7 +166,6 @@ pipeline {
               archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
               sh '''
                 set +e
-                # cleanup tolerante a erros
                 docker rm -f ci-db >/dev/null 2>&1 || true
                 docker network rm ci_net >/dev/null 2>&1 || true
               '''
@@ -201,7 +215,6 @@ pipeline {
       when {
         allOf {
           expression { params.ENABLE_GH_RELEASE as boolean }
-          // Libera para feat/CI/Docker, feat/CICD/Jenkins, main, master e release/*
           expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+)/ }
         }
       }
@@ -289,14 +302,9 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
     stage('Debug workspace') {
       steps {
         sh '''
-          echo "Caminho atual:"
-          pwd
-          echo
-          echo "Conteúdo do diretório atual:"
-          ls -la
-          echo
-          echo "Conteúdo recursivo:"
-          find . -maxdepth 3 -type f | sort
+          echo "Caminho atual:"; pwd; echo
+          echo "Conteúdo do diretório atual:"; ls -la; echo
+          echo "Conteúdo recursivo:"; find . -maxdepth 3 -type f | sort
         '''
       }
     }
