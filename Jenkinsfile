@@ -290,15 +290,18 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
               echo "[release] REPO=C14-2025/API-BolaMarcada"
             '''
 
-            sh '''
-              docker run --rm -v "$PWD":/w -w /w alpine:3.20 sh -lc "
-                set -e
-                apk add --no-cache bash curl jq
-                tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh
-                chmod +x /tmp/gh_release.sh
-                GITHUB_TOKEN=$GH_PAT GITHUB_REPO=C14-2025/API-BolaMarcada TAG=$CI_TAG ASSET_PATH=$IMAGE_TAR bash /tmp/gh_release.sh
-              "
-            '''
+            sh """
+                    docker run --rm \
+                        -v \$PWD:/w -w /w alpine:3.20 \
+                        sh -c "apk add --no-cache bash curl jq && \
+                               tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh && \
+                               chmod +x /tmp/gh_release.sh && \
+                               GITHUB_TOKEN=${GITHUB_TOKEN} \
+                               GITHUB_REPO=${repo} \
+                               TAG=${tag} \
+                               ASSET_PATH=${asset} \
+                               bash /tmp/gh_release.sh"
+                """
           }
         }
       }
