@@ -213,10 +213,8 @@ EOF
 
     stage('Upload GitHub Release (opcional)') {
       when {
-        allOf {
-          expression { params.ENABLE_GH_RELEASE as boolean }
-          expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+)/ }
-        }
+        // <<< LIBERADO PARA QUALQUER BRANCH, basta o parâmetro estar true >>>
+        expression { return params.ENABLE_GH_RELEASE as boolean }
       }
       steps {
         catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
@@ -284,6 +282,13 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
 '''
               }
             }
+
+            // debug rápido do que vamos subir
+            sh '''
+              echo "[release] TAG=$CI_TAG"
+              echo "[release] ASSET=$IMAGE_TAR"
+              echo "[release] REPO=C14-2025/API-BolaMarcada"
+            '''
 
             sh '''
               docker run --rm -v "$PWD":/w -w /w alpine:3.20 sh -lc "
