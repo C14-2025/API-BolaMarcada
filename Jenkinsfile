@@ -252,6 +252,21 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
       }
     }
 
+    stage('Debug workspace') {
+      steps {
+        sh '''
+          echo "Caminho atual:"
+          pwd
+          echo
+          echo "Conteúdo do diretório atual:"
+          ls -la
+          echo
+          echo "Conteúdo recursivo:"
+          find . -maxdepth 3 -type f | sort
+        '''
+      }
+    }
+
     stage('Notificação') {
       steps {
         // Não quebrar o pipeline se o SMTP falhar
