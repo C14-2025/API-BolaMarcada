@@ -356,3 +356,4 @@ print("Email enviado para", to_email)
       echo "Pipeline finalizado."
     }
   }
+}  
