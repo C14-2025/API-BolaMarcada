@@ -27,6 +27,8 @@ from routes.field_routes import field_router
 from routes.review_routes import review_router
 from routes.sports_center_routes import sports_center_router
 from routes.user_routes import user_router
+from routes.oauth_routes import oauth_router
+
 # (depois que criarmos as rotas OAuth, vamos importar aqui:)
 # from routes.oauth_routes import oauth_router
 
@@ -57,8 +59,7 @@ app.include_router(field_router, prefix=API_PREFIX)
 app.include_router(review_router, prefix=API_PREFIX)
 app.include_router(sports_center_router, prefix=API_PREFIX)
 app.include_router(user_router, prefix=API_PREFIX)
-# (quando criarmos oauth_routes.py:)
-# app.include_router(oauth_router, prefix=API_PREFIX)
+app.include_router(oauth_router, prefix=API_PREFIX)
 
 if __name__ == "__main__":
     # no Docker, exponha em 0.0.0.0

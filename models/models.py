@@ -50,7 +50,7 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, nullable=False, unique=True, index=True)
     hashed_password = Column(String, nullable=False)
-    cpf = Column(String, nullable=False, unique=True, index=True)
+    cpf = Column(String, nullable=True, unique=True, index=True)
     phone = Column(String)
     is_active = Column("active", Boolean, default=True, nullable=False)
     is_admin = Column("admin", Boolean, default=False, nullable=False)
