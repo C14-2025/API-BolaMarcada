@@ -217,81 +217,33 @@ EOF
   }
   steps {
     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-      withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
-        script {
-          // Cria o script se não existir
-          if (!fileExists('scripts')) { sh 'mkdir -p scripts' }
-          if (!fileExists('scripts/upload_github_release.sh')) {
-            writeFile file: 'scripts/upload_github_release.sh', text: '''#!/usr/bin/env bash
-set -euo pipefail
+      withCredentials([
+        string(credentialsId: 'github-pat', variable: 'GH_PAT')
+      ]) {
+        // debug rápido
+        sh '''
+          echo "[release] TAG=$CI_TAG"
+          echo "[release] ASSET=$IMAGE_TAR"
+          echo "[release] REPO=C14-2025/API-BolaMarcada"
+        '''
 
-: "${GITHUB_TOKEN:?GITHUB_TOKEN ausente}"
-: "${GITHUB_REPO:?GITHUB_REPO ausente (owner/repo)}"
-: "${TAG:?TAG ausente}"
-: "${ASSET_PATH:?ASSET_PATH ausente}"
-
-if [ ! -f "$ASSET_PATH" ]; then
-  echo "ERRO: asset não encontrado: $ASSET_PATH" >&2
-  exit 2
-fi
-
-OWNER="${GITHUB_REPO%%/*}"
-REPO="${GITHUB_REPO##*/}"
-API="https://api.github.com"
-UPLOADS="https://uploads.github.com"
-
-auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "User-Agent: jenkins-ci")
-
-echo "[gh] procurando release por tag: $TAG"
-set +e
-resp=$(curl -sS "${auth[@]}" "$API/repos/$OWNER/$REPO/releases/tags/$TAG")
-set -e
-
-if echo "$resp" | jq -e .id >/dev/null 2>&1; then
-  RELEASE_ID=$(echo "$resp" | jq -r .id)
-  echo "[gh] release existente id=$RELEASE_ID"
-else
-  echo "[gh] criando release nova"
-  payload=$(jq -n --arg tag "$TAG" --arg name "$TAG" \
-    '{ tag_name: $tag, name: $name, draft: false, prerelease: false }')
-  resp=$(curl -sS "${auth[@]}" -X POST "$API/repos/$OWNER/$REPO/releases" -d "$payload")
-  RELEASE_ID=$(echo "$resp" | jq -r .id)
-  echo "[gh] release criada id=$RELEASE_ID"
-fi
-
-asset_name="$(basename "$ASSET_PATH")"
-assets=$(curl -sS "${auth[@]}" "$API/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets")
-asset_id=$(echo "$assets" | jq -r --arg n "$asset_name" '.[] | select(.name==$n) | .id' | head -n1)
-if [ -n "${asset_id:-}" ] && [ "$asset_id" != "null" ]; then
-  echo "[gh] removendo asset existente id=$asset_id ($asset_name)"
-  curl -sS "${auth[@]}" -X DELETE "$API/repos/$OWNER/$REPO/releases/assets/$asset_id" >/dev/null
-fi
-
-echo "[gh] enviando asset: $asset_name"
-upload_url="$UPLOADS/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets?name=$(printf '%s' "$asset_name" | jq -sRr @uri)"
-curl -sS -X POST "${auth[@]}" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @"$ASSET_PATH" \
-  "$upload_url" >/dev/null
-
-echo "[gh] ok: release=$TAG asset=$asset_name"
-'''
-          }
-
-          // Executa o upload
-          sh """
-            docker run --rm -v \$PWD:/w -w /w alpine:3.20 sh -c '
-              apk add --no-cache bash curl jq && \
-              tr -d "\\r" < scripts/upload_github_release.sh > /tmp/gh_release.sh && \
-              chmod +x /tmp/gh_release.sh && \
-              GITHUB_TOKEN=\$GH_PAT \
-              GITHUB_REPO=C14-2025/API-BolaMarcada \
-              TAG=\$CI_TAG \
-              ASSET_PATH=\$IMAGE_TAR \
+        // executa o uploader dentro de um container Alpine com curl+jq
+        sh '''
+          set -euo pipefail
+          docker run --rm -v "$PWD":/w -w /w \
+            -e GITHUB_TOKEN="$GH_PAT" \
+            -e GITHUB_REPO="C14-2025/API-BolaMarcada" \
+            -e TAG="$CI_TAG" \
+            -e ASSET_PATH="$IMAGE_TAR" \
+            alpine:3.20 sh -lc '
+              set -e
+              apk add --no-cache bash curl jq
+              # garante LF e permissão
+              tr -d "\r" < scripts/upload_github_release.sh > /tmp/gh_release.sh
+              chmod +x /tmp/gh_release.sh
               bash /tmp/gh_release.sh
             '
-          """
-        }
+        '''
       }
     }
   }
