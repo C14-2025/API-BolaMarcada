@@ -33,8 +33,10 @@ pipeline {
       steps {
         checkout scm
         script {
+          // commit curto
           env.COMMIT = sh(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim().readLines().last().trim()
 
+          // branch robusto (evita HEAD em detached)
           def guess = env.BRANCH_NAME ?: env.GIT_BRANCH
           if (!guess || guess.trim() == 'HEAD') {
             def nameRev = sh(script: 'git name-rev --name-only HEAD', returnStdout: true).trim()
@@ -45,7 +47,9 @@ pipeline {
 
           env.IMAGE     = "app:${env.COMMIT}"
           env.IMAGE_TAR = "image-${env.COMMIT}.tar"
-          env.CI_TAG    = "ci-${env.BUILD_NUMBER}-${env.COMMIT}"
+
+          // TAG único por build (evita colar em release antiga)
+          env.CI_TAG = "ci-${env.BUILD_NUMBER}-${env.COMMIT}"
 
           echo "BRANCH=${env.BRANCH}  CI_TAG=${env.CI_TAG}  COMMIT=${env.COMMIT}"
         }
@@ -74,7 +78,8 @@ pipeline {
                   string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
                   string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
                 ]) {
-                  int rc = sh(returnStatus: true, script: '''
+                  // ====== sobe DB e espera ficar pronto (com timeout) ======
+                  sh '''
                     set -eux
 
                     echo "rede dedicada"
@@ -85,24 +90,46 @@ pipeline {
                     docker run -d --name ci-db --network ci_net \
                       -e POSTGRES_USER="$PGUSER" -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB="$PGDB" \
                       -p "$PGPORT":5432 postgres:17-alpine
+                  '''
 
-                    echo "espera Postgres"
-                    docker run --rm --network ci_net postgres:17-alpine sh -lc '
-                      until pg_isready -h "$PGHOST" -p 5432 -U "$PGUSER" -d "$PGDB"; do sleep 1; done
-                    '
-
-                    echo "roda pytest dentro da SUA imagem"
+                  int waitRc = sh(returnStatus: true, script: '''
+                    set -eux
+                    # passamos variáveis para o container que roda o pg_isready
                     docker run --rm --network ci_net \
-                      -e POSTGRES_SERVER="$PGHOST" -e POSTGRES_HOST="$PGHOST" \
-                      -e POSTGRES_USER="$PGUSER"   -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB="$PGDB" \
+                      -e PGUSER="$PGUSER" -e PGDB="$PGDB" -e PGPASSWORD="$PGPASS" \
+                      postgres:17-alpine sh -lc '
+                        i=0
+                        until pg_isready -h ci-db -p 5432 -U "$PGUSER" -d "$PGDB"; do
+                          i=$((i+1))
+                          if [ $i -ge 60 ]; then
+                            echo "ERRO: Postgres não ficou pronto em 60s"
+                            exit 1
+                          fi
+                          sleep 1
+                        done
+                      '
+                  ''')
+                  if (waitRc != 0) {
+                    // ajuda a debugar caso o pg não suba
+                    sh 'docker logs ci-db || true'
+                    error("Banco não ficou pronto (rc=${waitRc})")
+                  }
+
+                  // ====== roda pytest dentro da imagem da aplicação ======
+                  int rc = sh(returnStatus: true, script: '''
+                    set -eux
+                    docker run --rm --network ci_net \
+                      -e POSTGRES_SERVER="$PGHOST" -e POSTRES_HOST="$PGHOST" \
+                      -e POSTGRES_USER="$PGUSER" -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB="$PGDB" \
                       -e DATABASE_URL="postgresql+psycopg2://$PGUSER:$PGPASS@$PGHOST:5432/$PGDB" \
                       -e SECRET_KEY="$SECRET_KEY" \
                       -e ACCESS_TOKEN_EXPIRE_MINUTES="$ACCESS_TOKEN_EXPIRE_MINUTES" \
                       -e PYTHONPATH="/workspace" \
                       -v "$PWD":/workspace -w /workspace "$IMAGE" \
                       sh -lc '
-                        python -m pip install --disable-pip-version-check -U pip &&
-                        python -m pip install pytest pytest-cov &&
+                        set -eux
+                        python -m pip install --disable-pip-version-check -U pip
+                        python -m pip install pytest pytest-cov
                         pytest -vv tests --junit-xml="/workspace/$JUNIT_XML" --cov="/workspace" --cov-report=xml:"/workspace/$COVERAGE_XML"
                       '
                   ''')
@@ -122,6 +149,7 @@ pipeline {
               archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
               sh '''
                 set +e
+                # cleanup tolerante a erros
                 docker rm -f ci-db >/dev/null 2>&1 || true
                 docker network rm ci_net >/dev/null 2>&1 || true
               '''
@@ -171,6 +199,7 @@ pipeline {
       when {
         allOf {
           expression { params.ENABLE_GH_RELEASE as boolean }
+          // Libera para feat/CI/Docker, feat/CICD/Jenkins, main, master e release/*
           expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+)/ }
         }
       }
@@ -272,6 +301,7 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
 
     stage('Notificação') {
       steps {
+        // Não quebrar o pipeline se o SMTP falhar
         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
           script {
             def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
