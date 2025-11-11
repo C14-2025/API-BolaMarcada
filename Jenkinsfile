@@ -71,68 +71,68 @@ pipeline {
       parallel {
 
         stage('Testes') {
-  steps {
-    script {
-      catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-        withCredentials([
-          string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
-          string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
-        ]) {
-          sh """
-            echo "rede dedicada"
-            docker network create ci_net || echo net exists
+          steps {
+            script {
+              catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                withCredentials([
+                  string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
+                  string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
+                ]) {
+                  sh """
+                    echo "rede dedicada"
+                    docker network create ci_net || echo net exists
 
-            echo "sobe Postgres"
-            docker rm -f ci-db || true
-            docker run -d --name ci-db --network ci_net \\
-              -e POSTGRES_USER=$PGUSER -e POSTGRES_PASSWORD=$PGPASS -e POSTGRES_DB=$PGDB \\
-              -p $PGPORT:5432 postgres:17-alpine
+                    echo "sobe Postgres"
+                    docker rm -f ci-db || true
+                    docker run -d --name ci-db --network ci_net \\
+                      -e POSTGRES_USER=$PGUSER -e POSTGRES_PASSWORD=$PGPASS -e POSTGRES_DB=$PGDB \\
+                      -p $PGPORT:5432 postgres:17-alpine
 
-            echo "espera Postgres"
-            docker run --rm --network ci_net postgres:17-alpine sh -lc "until pg_isready -h $PGHOST -p 5432 -U $PGUSER -d $PGDB; do sleep 1; done"
+                    echo "espera Postgres"
+                    docker run --rm --network ci_net postgres:17-alpine sh -lc "until pg_isready -h $PGHOST -p 5432 -U $PGUSER -d $PGDB; do sleep 1; done"
 
-            echo "roda pytest dentro da SUA imagem"
-            docker run --rm --network ci_net \\
-              -e POSTGRES_SERVER=$PGHOST -e POSTGRES_HOST=$PGHOST \\
-              -e POSTGRES_USER=$PGUSER -e POSTGRES_PASSWORD=$PGPASS -e POSTGRES_DB=$PGDB \\
-              -e DATABASE_URL=postgresql+psycopg2://$PGUSER:$PGPASS@$PGHOST:5432/$PGDB \\
-              -e SECRET_KEY=$SECRET_KEY \\
-              -e ACCESS_TOKEN_EXPIRE_MINUTES=$ACCESS_TOKEN_EXPIRE_MINUTES \\
-              -e PYTHONPATH=/workspace \\
-              -v "\$PWD":/workspace -w /workspace $IMAGE \\
-              sh -lc "python -m pip install --disable-pip-version-check -U pip && python -m pip install pytest pytest-cov && pytest -vv tests --junit-xml=/workspace/$JUNIT_XML --cov=/workspace --cov-report=xml:/workspace/$COVERAGE_XML"
+                    echo "roda pytest dentro da SUA imagem"
+                    docker run --rm --network ci_net \\
+                      -e POSTGRES_SERVER=$PGHOST -e POSTGRES_HOST=$PGHOST \\
+                      -e POSTGRES_USER=$PGUSER -e POSTGRES_PASSWORD=$PGPASS -e POSTGRES_DB=$PGDB \\
+                      -e DATABASE_URL=postgresql+psycopg2://$PGUSER:$PGPASS@$PGHOST:5432/$PGDB \\
+                      -e SECRET_KEY=$SECRET_KEY \\
+                      -e ACCESS_TOKEN_EXPIRE_MINUTES=$ACCESS_TOKEN_EXPIRE_MINUTES \\
+                      -e PYTHONPATH=/workspace \\
+                      -v "\$PWD":/workspace -w /workspace $IMAGE \\
+                      sh -lc "python -m pip install --disable-pip-version-check -U pip && python -m pip install pytest pytest-cov && pytest -vv tests --junit-xml=/workspace/$JUNIT_XML --cov=/workspace --cov-report=xml:/workspace/$COVERAGE_XML"
 
-            RC=\$?
-            if [ $RC -eq 0 ]; then
-              echo SUCCESS > status_tests.txt
-            else
-              echo FAILURE > status_tests.txt
-              exit $RC
-            fi
-          """
+                    RC=\$?
+                    if [ $RC -eq 0 ]; then
+                      echo SUCCESS > status_tests.txt
+                    else
+                      echo FAILURE > status_tests.txt
+                      exit $RC
+                    fi
+                  """
+                }
+              }
+            }
+          }
+          post {
+            always {
+              junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
+              archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
+              sh '''
+                set +e
+                # cleanup tolerante a erros
+                docker rm -f ci-db >/dev/null 2>&1 || true
+                docker network rm ci_net >/dev/null 2>&1 || true
+              '''
+              script {
+                if (!fileExists('status_tests.txt')) {
+                  writeFile file: 'status_tests.txt', text: 'FAILURE'
+                }
+              }
+            }
+          }
         }
-      }
-    }
-  }
-  post {
-  always {
-    junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
-    archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
-    sh '''
-      set +e
-      # cleanup tolerante a erros
-      docker rm -f ci-db >/dev/null 2>&1 || true
-      docker network rm ci_net >/dev/null 2>&1 || true
-    '''
-    script {
-      if (!fileExists('status_tests.txt')) {
-        writeFile file: 'status_tests.txt', text: 'FAILURE'
-      }
-    }
-  }
-}
 
-        }
         stage('Empacotamento') {
           steps {
             script {
@@ -253,19 +253,19 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
     }
 
     stage('Notificação') {
-  steps {
-    // Não quebrar o pipeline se o SMTP falhar
-    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-      script {
-        def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
-        def packageStatus = fileExists('status_package.txt') ? readFile('status_package.txt').trim() : 'FAILURE'
+      steps {
+        // Não quebrar o pipeline se o SMTP falhar
+        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+          script {
+            def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
+            def packageStatus = fileExists('status_package.txt') ? readFile('status_package.txt').trim() : 'FAILURE'
 
-        // garante o script de notificação caso não exista no repo
-        if (!fileExists('scripts')) {
-          sh 'mkdir -p scripts'
-        }
-        if (!fileExists('scripts/notify_email.py')) {
-          writeFile file: 'scripts/notify_email.py', text: '''
+            // garante o script de notificação caso não exista no repo
+            if (!fileExists('scripts')) {
+              sh 'mkdir -p scripts'
+            }
+            if (!fileExists('scripts/notify_email.py')) {
+              writeFile file: 'scripts/notify_email.py', text: '''
 import os, smtplib, socket, ssl
 from email.message import EmailMessage
 
@@ -314,46 +314,47 @@ with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as s:
     s.send_message(msg)
 print("Email enviado para", to_email)
 '''.trim()
-        }
+            }
 
-        withCredentials([
-          usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
-          string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
-        ]) {
-          // injeta os status calculados sem GString
-          withEnv(["TESTS_STATUS=${testsStatus}", "PACKAGE_STATUS=${packageStatus}"]) {
-            sh(label: 'Enviar email (Mailtrap via Python no container)', script: '''
-              set -eu
-              docker run --rm \
-                -e TO_EMAIL="$TO_EMAIL" \
-                -e SMTP_SERVER="smtp.mailtrap.io" \
-                -e SMTP_PORT="2525" \
-                -e FROM_EMAIL="ci@jenkins.local" \
-                -e SMTP_USERNAME="$SMTP_USERNAME" \
-                -e SMTP_PASSWORD="$SMTP_PASSWORD" \
-                -e TESTS_STATUS="$TESTS_STATUS" \
-                -e PACKAGE_STATUS="$PACKAGE_STATUS" \
-                -e GIT_SHA="$COMMIT" \
-                -e GIT_BRANCH="$BRANCH" \
-                -e GITHUB_RUN_ID="$BUILD_ID" \
-                -e GITHUB_RUN_NUMBER="$BUILD_NUMBER" \
-                -v "$PWD":/w -w /w python:3.12-alpine \
-                sh -lc '
-                  set -e
-                  apk add --no-cache ca-certificates
-                  python3 scripts/notify_email.py
-                '
-            ''')
+            withCredentials([
+              usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
+              string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
+            ]) {
+              // injeta os status calculados sem GString
+              withEnv(["TESTS_STATUS=${testsStatus}", "PACKAGE_STATUS=${packageStatus}"]) {
+                sh(label: 'Enviar email (Mailtrap via Python no container)', script: '''
+                  set -eu
+                  docker run --rm \
+                    -e TO_EMAIL="$TO_EMAIL" \
+                    -e SMTP_SERVER="smtp.mailtrap.io" \
+                    -e SMTP_PORT="2525" \
+                    -e FROM_EMAIL="ci@jenkins.local" \
+                    -e SMTP_USERNAME="$SMTP_USERNAME" \
+                    -e SMTP_PASSWORD="$SMTP_PASSWORD" \
+                    -e TESTS_STATUS="$TESTS_STATUS" \
+                    -e PACKAGE_STATUS="$PACKAGE_STATUS" \
+                    -e GIT_SHA="$COMMIT" \
+                    -e GIT_BRANCH="$BRANCH" \
+                    -e GITHUB_RUN_ID="$BUILD_ID" \
+                    -e GITHUB_RUN_NUMBER="$BUILD_NUMBER" \
+                    -v "$PWD":/w -w /w python:3.12-alpine \
+                    sh -lc '
+                      set -e
+                      apk add --no-cache ca-certificates
+                      python3 scripts/notify_email.py
+                    '
+                ''')
+              }
+            }
           }
         }
       }
     }
   }
-}
 
   post {
     always {
       echo "Pipeline finalizado."
     }
   }
-}  
+}
