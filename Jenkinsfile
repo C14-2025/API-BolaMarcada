@@ -132,7 +132,7 @@ pipeline {
                         set -eux
                         python -m pip install --disable-pip-version-check -U pip
                         python -m pip install pytest pytest-cov
-                        pytest -vv tests --junit-xml="/workspace/$JUNIT_XML" --cov="/workspace" --cov-report=xml:"/workspace/$COVERAGE_XML"
+                        pytest -vv /workspace/tests --junit-xml="/workspace/$JUNIT_XML" --cov="/workspace" --cov-report=xml:"/workspace/$COVERAGE_XML"
                       '
                   ''')
                   if (rc == 0) {
