@@ -125,6 +125,8 @@ pipeline {
                       -e SECRET_KEY="$SECRET_KEY" \
                       -e ACCESS_TOKEN_EXPIRE_MINUTES="$ACCESS_TOKEN_EXPIRE_MINUTES" \
                       -e PYTHONPATH="/workspace" \
+                      -e JUNIT_XML="$JUNIT_XML" \
+                      -e COVERAGE_XML="$COVERAGE_XML" \
                       -v "$PWD":/workspace -w /workspace "$IMAGE" \
                       sh -lc '
                         set -eux
