@@ -24,8 +24,6 @@ services:
       db:
         condition: service_healthy
     entrypoint: ["/app/docker-entrypoint.sh"]
-    env_file:
-      - .env
     environment:
       # host/porta do DB dentro da rede do compose:
       POSTGRES_HOST: db

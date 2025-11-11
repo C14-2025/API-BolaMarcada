@@ -34,12 +34,12 @@ pipeline {
         checkout scm
         script {
           // commit curto
-          env.COMMIT = bat(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim().readLines().last().trim()
+          env.COMMIT = sh(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim().readLines().last().trim()
 
           // branch robusto (evita HEAD em detached)
           def guess = env.BRANCH_NAME ?: env.GIT_BRANCH
           if (!guess || guess.trim() == 'HEAD') {
-            def nameRev = bat(script: 'git name-rev --name-only HEAD', returnStdout: true).trim()
+            def nameRev = sh(script: 'git name-rev --name-only HEAD', returnStdout: true).trim()
             guess = nameRev ?: 'unknown'
           }
           guess = guess.replaceFirst(/^origin\\//, '').replaceFirst(/^remotes\\/origin\\//, '')
@@ -58,10 +58,10 @@ pipeline {
 
     stage('Build image') {
       steps {
-        bat '''
-          @echo on
+        sh '''
+          echo "docker version"
           docker version
-          docker build --pull -t %IMAGE% -t app:latest .
+          docker build --pull -t $IMAGE -t app:latest .
         '''
       }
     }
@@ -78,38 +78,37 @@ pipeline {
           string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
           string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
         ]) {
-          bat """
-            @echo on
-            rem -- rede dedicada
-            docker network create ci_net 2>nul || echo net exists
+          sh """
+            echo "rede dedicada"
+            docker network create ci_net || echo net exists
 
-            rem -- sobe Postgres
-            docker rm -f ci-db 2>nul
-            docker run -d --name ci-db --network ci_net ^
-              -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
-              -p %PGPORT%:5432 postgres:17-alpine
+            echo "sobe Postgres"
+            docker rm -f ci-db || true
+            docker run -d --name ci-db --network ci_net \\
+              -e POSTGRES_USER=$PGUSER -e POSTGRES_PASSWORD=$PGPASS -e POSTGRES_DB=$PGDB \\
+              -p $PGPORT:5432 postgres:17-alpine
 
-            rem -- espera Postgres
-            docker run --rm --network ci_net postgres:17-alpine sh -lc "until pg_isready -h %PGHOST% -p 5432 -U %PGUSER% -d %PGDB%; do sleep 1; done"
+            echo "espera Postgres"
+            docker run --rm --network ci_net postgres:17-alpine sh -lc "until pg_isready -h $PGHOST -p 5432 -U $PGUSER -d $PGDB; do sleep 1; done"
 
-            rem -- roda pytest dentro da SUA imagem
-            docker run --rm --network ci_net ^
-              -e POSTGRES_SERVER=%PGHOST% -e POSTGRES_HOST=%PGHOST% ^
-              -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
-              -e DATABASE_URL=postgresql+psycopg2://%PGUSER%:%PGPASS%@%PGHOST%:5432/%PGDB% ^
-              -e SECRET_KEY=%SECRET_KEY% ^
-              -e ACCESS_TOKEN_EXPIRE_MINUTES=%ACCESS_TOKEN_EXPIRE_MINUTES% ^
-              -e PYTHONPATH=/workspace ^
-              -v "%cd%":/workspace -w /workspace %IMAGE% ^
-              sh -lc "python -m pip install --disable-pip-version-check -U pip && python -m pip install pytest pytest-cov && pytest -vv tests --junit-xml=/workspace/%JUNIT_XML% --cov=/workspace --cov-report=xml:/workspace/%COVERAGE_XML%"
+            echo "roda pytest dentro da SUA imagem"
+            docker run --rm --network ci_net \\
+              -e POSTGRES_SERVER=$PGHOST -e POSTGRES_HOST=$PGHOST \\
+              -e POSTGRES_USER=$PGUSER -e POSTGRES_PASSWORD=$PGPASS -e POSTGRES_DB=$PGDB \\
+              -e DATABASE_URL=postgresql+psycopg2://$PGUSER:$PGPASS@$PGHOST:5432/$PGDB \\
+              -e SECRET_KEY=$SECRET_KEY \\
+              -e ACCESS_TOKEN_EXPIRE_MINUTES=$ACCESS_TOKEN_EXPIRE_MINUTES \\
+              -e PYTHONPATH=/workspace \\
+              -v "\$PWD":/workspace -w /workspace $IMAGE \\
+              sh -lc "python -m pip install --disable-pip-version-check -U pip && python -m pip install pytest pytest-cov && pytest -vv tests --junit-xml=/workspace/$JUNIT_XML --cov=/workspace --cov-report=xml:/workspace/$COVERAGE_XML"
 
-            set RC=%errorlevel%
-            if %RC%==0 (
-              echo SUCCESS>status_tests.txt
-            ) else (
-              echo FAILURE>status_tests.txt
-              exit /b %RC%
-            )
+            RC=$?
+            if [ $RC -eq 0 ]; then
+              echo SUCCESS > status_tests.txt
+            else
+              echo FAILURE > status_tests.txt
+              exit $RC
+            fi
           """
         }
       }
@@ -119,11 +118,11 @@ pipeline {
   always {
     junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
     archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
-    bat '''
-      @echo off
-      rem -- cleanup tolerante a erros
-      docker rm -f ci-db 1>nul 2>nul || ver > nul
-      docker network rm ci_net 1>nul 2>nul || ver > nul
+    sh '''
+      set +e
+      # cleanup tolerante a erros
+      docker rm -f ci-db >/dev/null 2>&1 || true
+      docker network rm ci_net >/dev/null 2>&1 || true
     '''
     script {
       if (!fileExists('status_tests.txt')) {
@@ -138,11 +137,16 @@ pipeline {
           steps {
             script {
               catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                bat """
-                  @echo on
-                  docker save %IMAGE% -o %IMAGE_TAR%
-                  set RC=%errorlevel%
-                  if %RC%==0 (echo SUCCESS>status_package.txt) else (echo FAILURE>status_package.txt & exit /b %RC%)
+                sh """
+                  echo "salvando imagem"
+                  docker save $IMAGE -o $IMAGE_TAR
+                  RC=$?
+                  if [ $RC -eq 0 ]; then
+                    echo SUCCESS > status_package.txt
+                  else
+                    echo FAILURE > status_package.txt
+                    exit $RC
+                  fi
                 """
               }
             }
@@ -175,7 +179,7 @@ pipeline {
           withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
             // Garante o script se não existir (idempotente e seguro)
             script {
-              if (!fileExists('scripts')) { bat 'mkdir scripts 2>nul' }
+              if (!fileExists('scripts')) { sh 'mkdir -p scripts' }
               if (!fileExists('scripts/upload_github_release.sh')) {
                 writeFile file: 'scripts/upload_github_release.sh', text: '''#!/usr/bin/env bash
 set -euo pipefail
@@ -240,9 +244,8 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
               }
             }
 
-            bat """
-              @echo on
-              docker run --rm -v "%cd%":/w -w /w alpine:3.20 sh -lc "set -e; apk add --no-cache bash curl jq; tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh; chmod +x /tmp/gh_release.sh; GITHUB_TOKEN=%GH_PAT% GITHUB_REPO=C14-2025/API-BolaMarcada TAG=%CI_TAG% ASSET_PATH=%IMAGE_TAR% bash /tmp/gh_release.sh"
+            sh """
+              docker run --rm -v "\$PWD":/w -w /w alpine:3.20 sh -lc "set -e; apk add --no-cache bash curl jq; tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh; chmod +x /tmp/gh_release.sh; GITHUB_TOKEN=$GH_PAT GITHUB_REPO=C14-2025/API-BolaMarcada TAG=$CI_TAG ASSET_PATH=$IMAGE_TAR bash /tmp/gh_release.sh"
             """
           }
         }
@@ -259,7 +262,7 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
 
             // garante o script de notificação caso não exista no repo
             if (!fileExists('scripts')) {
-              bat 'mkdir scripts 2>nul'
+              sh 'mkdir -p scripts'
             }
             if (!fileExists('scripts/notify_email.py')) {
               writeFile file: 'scripts/notify_email.py', text: '''
@@ -317,22 +320,21 @@ print("Email enviado para", to_email)
               usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
               string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
             ]) {
-              bat """
-                @echo on
-                docker run --rm ^
-                  -e TO_EMAIL=%TO_EMAIL% ^
-                  -e SMTP_SERVER=smtp.mailtrap.io ^
-                  -e SMTP_PORT=2525 ^
-                  -e FROM_EMAIL=ci@jenkins.local ^
-                  -e SMTP_USERNAME=%SMTP_USERNAME% ^
-                  -e SMTP_PASSWORD=%SMTP_PASSWORD% ^
-                  -e TESTS_STATUS=${testsStatus} ^
-                  -e PACKAGE_STATUS=${packageStatus} ^
-                  -e GIT_SHA=%COMMIT% ^
-                  -e GIT_BRANCH=%BRANCH% ^
-                  -e GITHUB_RUN_ID=%BUILD_ID% ^
-                  -e GITHUB_RUN_NUMBER=%BUILD_NUMBER% ^
-                  -v "%cd%":/w -w /w python:3.12-alpine ^
+              sh """
+                docker run --rm \\
+                  -e TO_EMAIL=$TO_EMAIL \\
+                  -e SMTP_SERVER=smtp.mailtrap.io \\
+                  -e SMTP_PORT=2525 \\
+                  -e FROM_EMAIL=ci@jenkins.local \\
+                  -e SMTP_USERNAME=$SMTP_USERNAME \\
+                  -e SMTP_PASSWORD=$SMTP_PASSWORD \\
+                  -e TESTS_STATUS=${testsStatus} \\
+                  -e PACKAGE_STATUS=${packageStatus} \\
+                  -e GIT_SHA=$COMMIT \\
+                  -e GIT_BRANCH=$BRANCH \\
+                  -e GITHUB_RUN_ID=$BUILD_ID \\
+                  -e GITHUB_RUN_NUMBER=$BUILD_NUMBER \\
+                  -v "\$PWD":/w -w /w python:3.12-alpine \\
                   sh -lc "apk add --no-cache ca-certificates && python scripts/notify_email.py"
               """
             }
