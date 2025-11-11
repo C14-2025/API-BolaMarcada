@@ -102,7 +102,7 @@ pipeline {
               -v "\$PWD":/workspace -w /workspace $IMAGE \\
               sh -lc "python -m pip install --disable-pip-version-check -U pip && python -m pip install pytest pytest-cov && pytest -vv tests --junit-xml=/workspace/$JUNIT_XML --cov=/workspace --cov-report=xml:/workspace/$COVERAGE_XML"
 
-            RC=/$?
+            RC=\$?
             if [ $RC -eq 0 ]; then
               echo SUCCESS > status_tests.txt
             else
@@ -140,7 +140,7 @@ pipeline {
                 sh """
                   echo "salvando imagem"
                   docker save $IMAGE -o $IMAGE_TAR
-                  RC=/$?
+                  RC=\$?
                   if [ $RC -eq 0 ]; then
                     echo SUCCESS > status_package.txt
                   else
@@ -204,7 +204,7 @@ auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.git
 echo "[gh] procurando release por tag: $TAG"
 set +e
 resp=$(curl -sS "${auth[@]}" "$API/repos/$OWNER/$REPO/releases/tags/$TAG")
-code=/$?
+code=\$?
 set -e
 
 if echo "$resp" | jq -e .id >/dev/null 2>&1; then
