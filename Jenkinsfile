@@ -352,11 +352,11 @@ print("Email enviado para", to_email)
                     -e GIT_BRANCH="$BRANCH" \
                     -e GITHUB_RUN_ID="$BUILD_ID" \
                     -e GITHUB_RUN_NUMBER="$BUILD_NUMBER" \
-                    -v "$PWD":/w -w /w python:3.12-alpine \
+                    -v "${WORKSPACE}:/w" -w /w python:3.12-alpine \
                     sh -lc '
                       set -e
                       apk add --no-cache ca-certificates
-                      python3 scripts/notify_email.py
+                      python3 ./scripts/notify_email.py
                     '
                 ''')
               }
