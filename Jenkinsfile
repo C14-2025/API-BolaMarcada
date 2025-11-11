@@ -356,7 +356,7 @@ print("Email enviado para", to_email)
                     sh -lc '
                       set -e
                       apk add --no-cache ca-certificates
-                      python3 scripts/notify.py
+                      python3 scripts/notify_email.py
                     '
                 ''')
               }
