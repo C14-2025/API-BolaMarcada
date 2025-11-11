@@ -212,17 +212,17 @@ EOF
     }
 
     stage('Upload GitHub Release (opcional)') {
-      when {
-        // <<< LIBERADO PARA QUALQUER BRANCH, basta o parâmetro estar true >>>
-        expression { return params.ENABLE_GH_RELEASE as boolean }
-      }
-      steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-          withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
-            script {
-              if (!fileExists('scripts')) { sh 'mkdir -p scripts' }
-              if (!fileExists('scripts/upload_github_release.sh')) {
-                writeFile file: 'scripts/upload_github_release.sh', text: '''#!/usr/bin/env bash
+  when {
+    expression { return params.ENABLE_GH_RELEASE as boolean }
+  }
+  steps {
+    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+      withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
+        script {
+          // Cria o script se não existir
+          if (!fileExists('scripts')) { sh 'mkdir -p scripts' }
+          if (!fileExists('scripts/upload_github_release.sh')) {
+            writeFile file: 'scripts/upload_github_release.sh', text: '''#!/usr/bin/env bash
 set -euo pipefail
 
 : "${GITHUB_TOKEN:?GITHUB_TOKEN ausente}"
@@ -255,10 +255,6 @@ else
   payload=$(jq -n --arg tag "$TAG" --arg name "$TAG" \
     '{ tag_name: $tag, name: $name, draft: false, prerelease: false }')
   resp=$(curl -sS "${auth[@]}" -X POST "$API/repos/$OWNER/$REPO/releases" -d "$payload")
-  if ! echo "$resp" | jq -e .id >/dev/null 2>&1; then
-    echo "ERRO ao criar release: $resp" >&2
-    exit 3
-  fi
   RELEASE_ID=$(echo "$resp" | jq -r .id)
   echo "[gh] release criada id=$RELEASE_ID"
 fi
@@ -280,32 +276,26 @@ curl -sS -X POST "${auth[@]}" \
 
 echo "[gh] ok: release=$TAG asset=$asset_name"
 '''
-              }
-            }
-
-            // debug rápido do que vamos subir
-            sh '''
-              echo "[release] TAG=$CI_TAG"
-              echo "[release] ASSET=$IMAGE_TAR"
-              echo "[release] REPO=C14-2025/API-BolaMarcada"
-            '''
-
-            sh """
-                    docker run --rm \
-                        -v \$PWD:/w -w /w alpine:3.20 \
-                        sh -c "apk add --no-cache bash curl jq && \
-                               tr -d '\\r' < scripts/upload_github_release.sh > /tmp/gh_release.sh && \
-                               chmod +x /tmp/gh_release.sh && \
-                               GITHUB_TOKEN=${GITHUB_TOKEN} \
-                               GITHUB_REPO=${repo} \
-                               TAG=${tag} \
-                               ASSET_PATH=${asset} \
-                               bash /tmp/gh_release.sh"
-                """
           }
+
+          // Executa o upload
+          sh """
+            docker run --rm -v \$PWD:/w -w /w alpine:3.20 sh -c '
+              apk add --no-cache bash curl jq && \
+              tr -d "\\r" < scripts/upload_github_release.sh > /tmp/gh_release.sh && \
+              chmod +x /tmp/gh_release.sh && \
+              GITHUB_TOKEN=\$GH_PAT \
+              GITHUB_REPO=C14-2025/API-BolaMarcada \
+              TAG=\$CI_TAG \
+              ASSET_PATH=\$IMAGE_TAR \
+              bash /tmp/gh_release.sh
+            '
+          """
         }
       }
     }
+  }
+}
 
     stage('Debug workspace') {
       steps {
