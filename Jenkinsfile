@@ -321,20 +321,20 @@ print("Email enviado para", to_email)
               string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
             ]) {
               sh """
-                docker run --rm \\
-                  -e TO_EMAIL=$TO_EMAIL \\
-                  -e SMTP_SERVER=smtp.mailtrap.io \\
-                  -e SMTP_PORT=2525 \\
-                  -e FROM_EMAIL=ci@jenkins.local \\
-                  -e SMTP_USERNAME=$SMTP_USERNAME \\
-                  -e SMTP_PASSWORD=$SMTP_PASSWORD \\
-                  -e TESTS_STATUS=${testsStatus} \\
-                  -e PACKAGE_STATUS=${packageStatus} \\
-                  -e GIT_SHA=$COMMIT \\
-                  -e GIT_BRANCH=$BRANCH \\
-                  -e GITHUB_RUN_ID=$BUILD_ID \\
-                  -e GITHUB_RUN_NUMBER=$BUILD_NUMBER \\
-                  -v "\$PWD":/w -w /w python:3.12-alpine \\
+                docker run --rm \
+                  -e TO_EMAIL=$TO_EMAIL \
+                  -e SMTP_SERVER=smtp.mailtrap.io \
+                  -e SMTP_PORT=2525 \
+                  -e FROM_EMAIL=ci@jenkins.local \
+                  -e SMTP_USERNAME=$SMTP_USERNAME \
+                  -e SMTP_PASSWORD=$SMTP_PASSWORD \
+                  -e TESTS_STATUS=${testsStatus} \
+                  -e PACKAGE_STATUS=${packageStatus} \
+                  -e GIT_SHA=$COMMIT \
+                  -e GIT_BRANCH=$BRANCH \
+                  -e GITHUB_RUN_ID=$BUILD_ID \
+                  -e GITHUB_RUN_NUMBER=$BUILD_NUMBER \
+                  -v "${env.WORKSPACE}:/w" -w /w python:3.12-alpine \
                   sh -lc "apk add --no-cache ca-certificates && python scripts/notify_email.py"
               """
             }
