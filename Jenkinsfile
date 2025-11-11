@@ -253,19 +253,19 @@ echo "[gh] ok: release=$TAG asset=$asset_name"
     }
 
     stage('Notificação') {
-      steps {
-        // Não quebrar o pipeline se o SMTP falhar
-        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-          script {
-            def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
-            def packageStatus = fileExists('status_package.txt') ? readFile('status_package.txt').trim() : 'FAILURE'
+  steps {
+    // Não quebrar o pipeline se o SMTP falhar
+    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+      script {
+        def testsStatus   = fileExists('status_tests.txt')   ? readFile('status_tests.txt').trim()   : 'FAILURE'
+        def packageStatus = fileExists('status_package.txt') ? readFile('status_package.txt').trim() : 'FAILURE'
 
-            // garante o script de notificação caso não exista no repo
-            if (!fileExists('scripts')) {
-              sh 'mkdir -p scripts'
-            }
-            if (!fileExists('scripts/notify_email.py')) {
-              writeFile file: 'scripts/notify_email.py', text: '''
+        // garante o script de notificação caso não exista no repo
+        if (!fileExists('scripts')) {
+          sh 'mkdir -p scripts'
+        }
+        if (!fileExists('scripts/notify_email.py')) {
+          writeFile file: 'scripts/notify_email.py', text: '''
 import os, smtplib, socket, ssl
 from email.message import EmailMessage
 
@@ -314,35 +314,42 @@ with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as s:
     s.send_message(msg)
 print("Email enviado para", to_email)
 '''.trim()
-            }
+        }
 
-            withCredentials([
-              usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
-              string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
-            ]) {
-              sh """
-                docker run --rm \
-                  -e TO_EMAIL=$TO_EMAIL \
-                  -e SMTP_SERVER=smtp.mailtrap.io \
-                  -e SMTP_PORT=2525 \
-                  -e FROM_EMAIL=ci@jenkins.local \
-                  -e SMTP_USERNAME=$SMTP_USERNAME \
-                  -e SMTP_PASSWORD=$SMTP_PASSWORD \
-                  -e TESTS_STATUS=${testsStatus} \
-                  -e PACKAGE_STATUS=${packageStatus} \
-                  -e GIT_SHA=$COMMIT \
-                  -e GIT_BRANCH=$BRANCH \
-                  -e GITHUB_RUN_ID=$BUILD_ID \
-                  -e GITHUB_RUN_NUMBER=$BUILD_NUMBER \
-                  -v "/var/jenkins_home/workspace/bolamarcada:/w" -w /w python:3.12-alpine \
-                  sh -lc "apk add --no-cache ca-certificates && python scripts/notify.py"
-              """
-            }
+        withCredentials([
+          usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'SMTP_USERNAME', passwordVariable: 'SMTP_PASSWORD'),
+          string(credentialsId: 'EMAIL_TO', variable: 'TO_EMAIL')
+        ]) {
+          // injeta os status calculados sem GString
+          withEnv(["TESTS_STATUS=${testsStatus}", "PACKAGE_STATUS=${packageStatus}"]) {
+            sh(label: 'Enviar email (Mailtrap via Python no container)', script: '''
+              set -eu
+              docker run --rm \
+                -e TO_EMAIL="$TO_EMAIL" \
+                -e SMTP_SERVER="smtp.mailtrap.io" \
+                -e SMTP_PORT="2525" \
+                -e FROM_EMAIL="ci@jenkins.local" \
+                -e SMTP_USERNAME="$SMTP_USERNAME" \
+                -e SMTP_PASSWORD="$SMTP_PASSWORD" \
+                -e TESTS_STATUS="$TESTS_STATUS" \
+                -e PACKAGE_STATUS="$PACKAGE_STATUS" \
+                -e GIT_SHA="$COMMIT" \
+                -e GIT_BRANCH="$BRANCH" \
+                -e GITHUB_RUN_ID="$BUILD_ID" \
+                -e GITHUB_RUN_NUMBER="$BUILD_NUMBER" \
+                -v "$PWD":/w -w /w python:3.12-alpine \
+                sh -lc '
+                  set -e
+                  apk add --no-cache ca-certificates
+                  python3 scripts/notify_email.py
+                '
+            ''')
           }
         }
       }
     }
   }
+}
 
   post {
     always {
