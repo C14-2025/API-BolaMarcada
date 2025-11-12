@@ -15,7 +15,7 @@ pipeline {
     )
     booleanParam(
       name: 'FORCE_GH_RELEASE',
-      defaultValue: false,
+      defaultValue: true,
       description: 'Forçar upload do asset em qualquer branch'
     )
   }
