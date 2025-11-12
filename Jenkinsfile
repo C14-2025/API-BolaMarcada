@@ -13,6 +13,11 @@ pipeline {
       defaultValue: true,
       description: 'Publicar image-<commit>.tar como asset em um Release do GitHub (opcional)'
     )
+    booleanParam(
+      name: 'FORCE_GH_RELEASE',
+      defaultValue: false,
+      description: 'Forçar upload do asset em qualquer branch'
+    )
   }
 
   environment {
@@ -164,10 +169,14 @@ pipeline {
 
     stage('Upload GitHub Release (opcional)') {
       when {
-        allOf {
-          expression { params.ENABLE_GH_RELEASE as boolean }
-          // Libera para feat/CI/Docker, feat/CICD/Jenkins, main, master e release/*
-          expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+)/ }
+        anyOf {
+          allOf {
+            expression { params.ENABLE_GH_RELEASE as boolean }
+            // Libera para feat/CI/Docker, feat/CICD/Jenkins, main, master e release/*
+            expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+)/ }
+          }
+          // Novo: permite forçar em QUALQUER branch
+          expression { params.FORCE_GH_RELEASE as boolean }
         }
       }
       steps {
@@ -214,7 +223,7 @@ else
   if ! echo "$resp" | jq -e .id >/dev/null 2>&1; then
     echo "ERRO ao criar release: $resp" >&2
     exit 3
-  fi
+  }
   RELEASE_ID=$(echo "$resp" | jq -r .id)
   echo "[gh] release criada id=$RELEASE_ID"
 fi
@@ -347,4 +356,4 @@ print("Email enviado para", to_email)
       echo "Pipeline finalizado."
     }
   }
-}  
+}
