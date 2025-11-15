@@ -94,7 +94,7 @@ pipeline {
                 withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
                     sh '''
                     # Autentica GitHub CLI com token
-                    gh auth login --with-token <<< $GH_TOKEN
+                    echo $GH_TOKEN | gh auth login --with-token
 
                     # Cria release automaticamente com os artefatos do build
                     gh release create v1.0.0 dist/*.whl dist/*.tar.gz \
