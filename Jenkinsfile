@@ -40,15 +40,64 @@ python -m pip install --upgrade pip
             }
         }
 
-        stage('Install Dependencies') {
-            steps {
-                echo "📚 Instalando dependências..."
-                sh '''
-                . $VENV_DIR/bin/activate
-                pip install -r requirements.txt
-                '''
-            }
-        }
+        // stage('Install Dependencies') {
+        //     steps {
+        //         echo "📚 Instalando dependências..."
+        //         sh '''
+        //         . $VENV_DIR/bin/activate
+        //         pip install -r requirements.txt
+        //         '''
+        //     }
+        // }
+
+        // stage('Build') {
+        //     steps {
+        //         echo "🏗️ Realizando build do projeto..."
+        //         sh '''
+        //         . $VENV_DIR/bin/activate
+        //         pip install build
+        //         python -m build || echo "⚠️ Nenhum processo de build necessário."
+        //         '''
+        //     }
+        // }
+
+        // stage('Run Tests') {
+        //     steps {
+        //         echo "🧪 Executando testes unitários com pytest..."
+        //         sh '''
+        //         . $VENV_DIR/bin/activate
+        //         mkdir -p reports
+        //         pytest tests/ --maxfail=1 --disable-warnings \
+        //             --junitxml=reports/report.xml \
+        //             --html=reports/report.html
+        //         '''
+        //     }
+        // }
+
+        // stage('Archive Artifacts') {
+        //     steps {
+        //         echo "📦 Armazenando artefatos do build e relatórios..."
+        //         archiveArtifacts artifacts: 'dist/*.whl, dist/*.tar.gz, tests/**/report*.xml, reports/**/*.html', fingerprint: true
+        //     }
+        // }
+
+        // stage('Notification'){
+
+        //     steps {
+        //         echo '📩 Enviando notificação por e-mail...'
+        //         withCredentials([
+        //             string(credentialsId: 'EMAIL_DESTINO', variable: 'EMAIL_DESTINO'),
+        //             usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')
+        //         ]) {
+        //             sh '''
+        //                 cd scripts
+        //                 chmod 775 shell.sh
+        //                 ./shell.sh
+        //             '''
+        //         }
+        //     }
+        // }
+    }
 
     post {
         success {
