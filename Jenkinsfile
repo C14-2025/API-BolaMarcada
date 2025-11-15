@@ -41,6 +41,8 @@ pipeline {
                 echo "📚 Instalando dependências..."
                 sh '''
                 . $VENV_DIR/bin/activate
+                ls -l
+                cat requirements.txt
                 pip cache purge
                 pip install --upgrade pip
                 pip install psycopg2-binary==2.9.10 --no-cache-dir
