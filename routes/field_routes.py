@@ -40,19 +40,6 @@ async def get_field(field_id: int, session: Session = Depends(get_db)):
     return field
 
 
-@field_router.delete("/{field_id}")
-async def delete_field(field_id: int, session: Session = Depends(get_db)):
-    try:
-        # Chama o método que tenta deletar o campo
-        delete_field_by_id(session, field_id)
-        return {"message": "Campo deletado com sucesso."}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=f"Erro ao deletar campo: {str(e)}")
-
-
 @field_router.patch("/{field_id}")
 async def update_field(
     field_id: int, field_update: FieldUpdate, session: Session = Depends(get_db)
@@ -75,3 +62,16 @@ async def update_field(
         raise HTTPException(
             status_code=400, detail=f"Erro ao atualizar campo: {str(e)}"
         )
+
+
+@field_router.delete("/{field_id}")
+async def delete_field(field_id: int, session: Session = Depends(get_db)):
+    try:
+        # Chama o método que tenta deletar o campo
+        delete_field_by_id(session, field_id)
+        return {"message": "Campo deletado com sucesso."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao deletar campo: {str(e)}")
