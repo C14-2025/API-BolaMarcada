@@ -74,29 +74,29 @@ python -m pip install --upgrade pip
             }
         }
 
-        stage('Archive Artifacts') {
-            steps {
-                echo "📦 Armazenando artefatos do build e relatórios..."
-                archiveArtifacts artifacts: 'dist/*.whl, dist/*.tar.gz, tests/**/report*.xml, reports/**/*.html', fingerprint: true
-            }
-        }
+        // stage('Archive Artifacts') {
+        //     steps {
+        //         echo "📦 Armazenando artefatos do build e relatórios..."
+        //         archiveArtifacts artifacts: 'dist/*.whl, dist/*.tar.gz, tests/**/report*.xml, reports/**/*.html', fingerprint: true
+        //     }
+        // }
 
-        stage('Notification'){
+        // stage('Notification'){
 
-            steps {
-                echo '📩 Enviando notificação por e-mail...'
-                withCredentials([
-                    string(credentialsId: 'EMAIL_DESTINO', variable: 'EMAIL_DESTINO'),
-                    usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')
-                ]) {
-                    sh '''
-                        cd scripts
-                        chmod 775 shell.sh
-                        ./shell.sh
-                    '''
-                }
-            }
-        }
+        //     steps {
+        //         echo '📩 Enviando notificação por e-mail...'
+        //         withCredentials([
+        //             string(credentialsId: 'EMAIL_DESTINO', variable: 'EMAIL_DESTINO'),
+        //             usernamePassword(credentialsId: 'mailtrap-smtp', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')
+        //         ]) {
+        //             sh '''
+        //                 cd scripts
+        //                 chmod 775 shell.sh
+        //                 ./shell.sh
+        //             '''
+        //         }
+        //     }
+        // }
     }
 
     post {
