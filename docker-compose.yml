@@ -1,30 +1,41 @@
+
 services:
   db:
-    image: postgres:15
-    platform: linux/amd64
-    restart: always
+    image: postgres:17-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-bolamarcadadb}
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
 
   api:
-    build: .
-    platform: linux/amd64
-    restart: always
-    env_file:
-      - .env
+    build:
+      context: .
+      dockerfile: Dockerfile
     depends_on:
-      - db
-    command: ["/wait-for-it.sh", "db:5432", "--", "sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+      db:
+        condition: service_healthy
+    entrypoint: ["/app/docker-entrypoint.sh"]
+    environment:
+      # host/porta do DB dentro da rede do compose:
+      POSTGRES_HOST: db
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-bolamarcadadb}
+      # URL completa p/ SQLAlchemy (psycopg2):
+      DATABASE_URL: "postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-bolamarcadadb}"
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app
 
 volumes:
-  postgres_data:
+  pgdata:

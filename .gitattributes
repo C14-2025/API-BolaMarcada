@@ -1,0 +1,9 @@
+# força LF nos arquivos sensíveis a shell
+*.sh            text eol=lf
+*.py            text eol=lf
+Dockerfile      text eol=lf
+docker-compose*.yml text eol=lf
+*.env           text eol=lf
+*.ini           text eol=lf
+*.cfg           text eol=lf
+*.sql           text eol=lf
