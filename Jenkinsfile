@@ -17,6 +17,7 @@ pipeline {
                         url: 'https://github.com/C14-2025/API-BolaMarcada.git',
                         credentialsId: 'PAT_Jenkins'
                     ]]
+                    extensions: [[$class: 'WipeWorkspace']]
                 ])
             }
         }
@@ -46,7 +47,7 @@ pipeline {
                 pip cache purge
                 pip install --upgrade pip
                 pip install psycopg2-binary==2.9.10 --no-cache-dir
-                pip install --no-cache-dir -r requirement.txt
+                pip install --no-cache-dir -r requirements.txt
                 '''
             }
         }
