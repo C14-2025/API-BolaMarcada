@@ -97,8 +97,8 @@ pipeline {
                     curl -X POST -H "Authorization: token $GH_TOKEN" \
                         -H "Content-Type: application/json" \
                         -d '{
-                            "tag_name": "v1.0.0",
-                            "name": "v1.0.0",
+                            "tag_name": "v${BUILD_NUMBER}",
+                            "name": "v${BUILD_NUMBER}",
                             "body": "Build automatizado via Jenkins"
                         }' \
                         https://api.github.com/repos/C14-2025/API-BolaMarcada/releases
