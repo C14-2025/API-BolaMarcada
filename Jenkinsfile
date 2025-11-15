@@ -93,13 +93,15 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
                     sh '''
-                    # Autentica GitHub CLI com token
-                    echo $GH_TOKEN | gh auth login --with-token
-
-                    # Cria release automaticamente com os artefatos do build
-                    gh release create v1.0.0 dist/*.whl dist/*.tar.gz \
-                        --title "Release v1.0.0" \
-                        --notes "Build automatizado via Jenkins"
+                    # Cria release usando a API do GitHub via curl
+                    curl -X POST -H "Authorization: token $GH_TOKEN" \
+                        -H "Content-Type: application/json" \
+                        -d '{
+                            "tag_name": "v1.0.0",
+                            "name": "v1.0.0",
+                            "body": "Build automatizado via Jenkins"
+                        }' \
+                        https://api.github.com/repos/C14-2025/API-BolaMarcada/releases
                     '''
                 }
             }
