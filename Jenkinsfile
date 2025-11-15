@@ -93,15 +93,10 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
                     sh '''
-                    git config --global user.email "thomasvictordias@outlook.com"
-                    git config --global user.name "thmsVDC"
-
-                    # Cria uma tag (ex: v1.0.0)
-                    git tag -a v1.0.0 -m "Release v1.0.0"
-                    git push origin v1.0.0
-
-                    # Cria release usando GitHub CLI
+                    # Autentica GitHub CLI com token
                     gh auth login --with-token <<< $GH_TOKEN
+
+                    # Cria release automaticamente com os artefatos do build
                     gh release create v1.0.0 dist/*.whl dist/*.tar.gz \
                         --title "Release v1.0.0" \
                         --notes "Build automatizado via Jenkins"
