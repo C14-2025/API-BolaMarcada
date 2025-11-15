@@ -51,17 +51,6 @@ pipeline {
             }
         }
 
-        stage('Build') {
-            steps {
-                echo "🏗️ Realizando build do projeto..."
-                sh '''
-                . $VENV_DIR/bin/activate
-                pip install build
-                python -m build || echo "⚠️ Nenhum processo de build necessário."
-                '''
-            }
-        }
-
         stage('Run Tests') {
             steps {
                 echo "🧪 Executando testes unitários com pytest..."
@@ -82,10 +71,42 @@ pipeline {
             }
         }
 
+        stage('Build') {
+            steps {
+                echo "🏗️ Realizando build do projeto..."
+                sh '''
+                . $VENV_DIR/bin/activate
+                pip install build
+                python -m build || echo "⚠️ Nenhum processo de build necessário."
+                '''
+            }
+        }
+
         stage('Archive Artifacts') {
             steps {
                 echo "📦 Armazenando artefatos do build e relatórios..."
                 archiveArtifacts artifacts: 'dist/*.whl, dist/*.tar.gz, tests/**/report*.xml, reports/**/*.html', fingerprint: true
+            }
+        }
+
+        stage('Create GitHub Release') {
+            steps {
+                withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+                    sh '''
+                    git config --global user.email "thomasvictordias@outlook.com"
+                    git config --global user.name "thmsVDC"
+
+                    # Cria uma tag (ex: v1.0.0)
+                    git tag -a v1.0.0 -m "Release v1.0.0"
+                    git push origin v1.0.0
+
+                    # Cria release usando GitHub CLI
+                    gh auth login --with-token <<< $GH_TOKEN
+                    gh release create v1.0.0 dist/*.whl dist/*.tar.gz \
+                        --title "Release v1.0.0" \
+                        --notes "Build automatizado via Jenkins"
+                    '''
+                }
             }
         }
 
@@ -105,6 +126,8 @@ pipeline {
                 }
             }
         }
+
+        
     }
 
     post {
