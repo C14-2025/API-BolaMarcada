@@ -66,7 +66,7 @@ pipeline {
             steps {
                 echo "🧪 Executando testes unitários com pytest..."
                 withCredentials([
-                    usernamePassword(credentialsId: 'POSTGRES_USER_PASS', usernameVariable: 'POSTGRES_USER', passwordVariable: 'POSTGRES_PASSWORD'),
+                    usernamePassword(credentialsId: 'pg-db', usernameVariable: 'POSTGRES_USER', passwordVariable: 'POSTGRES_PASSWORD'),
                     string(credentialsId: 'POSTGRES_SERVER', variable: 'POSTGRES_SERVER'),
                     string(credentialsId: 'POSTGRES_DB', variable: 'POSTGRES_DB'),
                     string(credentialsId: 'SECRET_KEY', variable: 'SECRET_KEY')
