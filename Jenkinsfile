@@ -12,7 +12,7 @@ pipeline {
                 echo "📦 Clonando repositório..."
                 checkout([
                     $class: 'GitSCM',
-                    branches: [[name: '*/ajustes-jenkins-para-linux']],
+                    branches: [[name: '*/main']],
                     userRemoteConfigs: [[
                         url: 'https://github.com/C14-2025/API-BolaMarcada.git',
                         credentialsId: 'PAT_Jenkins'
