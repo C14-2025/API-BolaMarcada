@@ -45,6 +45,7 @@ python -m pip install --upgrade pip
                 echo "📚 Instalando dependências..."
                 sh '''
                 . $VENV_DIR/bin/activate
+                pip cache purge
                 pip install -r requirements.txt
                 '''
             }
