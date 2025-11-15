@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "api-bolamarcada"
 version = "0.1.0"
+packages=find_packages(include=["core", "models", "routes", "schemas", "services", "alembic"]),
 description = "API do projeto Bola Marcada"
 authors = [
   { name="Thomas Victor Dias Carvalho", email="thomasvictordias@outlook.com" }
