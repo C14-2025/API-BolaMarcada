@@ -46,7 +46,8 @@ python -m pip install --upgrade pip
                 sh '''
                 . $VENV_DIR/bin/activate
                 pip cache purge
-                pip install -r requirements.txt
+                pip install --upgrade pip
+                pip install --no-cache-dir -r requirements.txt
                 '''
             }
         }
