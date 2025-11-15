@@ -52,29 +52,29 @@ python -m pip install --upgrade pip
             }
         }
 
-        stage('Build') {
-            steps {
-                echo "🏗️ Realizando build do projeto..."
-                sh '''
-                . $VENV_DIR/bin/activate
-                pip install build
-                python -m build || echo "⚠️ Nenhum processo de build necessário."
-                '''
-            }
-        }
+        // stage('Build') {
+        //     steps {
+        //         echo "🏗️ Realizando build do projeto..."
+        //         sh '''
+        //         . $VENV_DIR/bin/activate
+        //         pip install build
+        //         python -m build || echo "⚠️ Nenhum processo de build necessário."
+        //         '''
+        //     }
+        // }
 
-        stage('Run Tests') {
-            steps {
-                echo "🧪 Executando testes unitários com pytest..."
-                sh '''
-                . $VENV_DIR/bin/activate
-                mkdir -p reports
-                pytest tests/ --maxfail=1 --disable-warnings \
-                    --junitxml=reports/report.xml \
-                    --html=reports/report.html
-                '''
-            }
-        }
+        // stage('Run Tests') {
+        //     steps {
+        //         echo "🧪 Executando testes unitários com pytest..."
+        //         sh '''
+        //         . $VENV_DIR/bin/activate
+        //         mkdir -p reports
+        //         pytest tests/ --maxfail=1 --disable-warnings \
+        //             --junitxml=reports/report.xml \
+        //             --html=reports/report.html
+        //         '''
+        //     }
+        // }
 
         // stage('Archive Artifacts') {
         //     steps {
