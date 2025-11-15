@@ -47,6 +47,7 @@ python -m pip install --upgrade pip
                 . $VENV_DIR/bin/activate
                 pip cache purge
                 pip install --upgrade pip
+                pip install psycopg2-binary==2.9.10 --no-cache-dir
                 pip install --no-cache-dir -r requirements.txt
                 '''
             }
