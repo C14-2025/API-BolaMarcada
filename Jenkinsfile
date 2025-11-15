@@ -23,20 +23,16 @@ pipeline {
 
         stage('Setup Python Environment') {
             steps {
-                echo "🐍 Criando ambiente virtual..."
-                sh '''
-if command -v $PYTHON &> /dev/null
-then
-    echo "✅ Python encontrado: $($PYTHON --version)"
-else
-    echo "❌ Python3 não encontrado no ambiente Jenkins."
-    exit 1
-fi
+              echo "🐍 Criando ambiente virtual..."
+              sh '''
+              if [ -d "$VENV_DIR" ]; then
+                  rm -rf $VENV_DIR
+              fi
 
-$PYTHON -m venv $VENV_DIR
-. $VENV_DIR/bin/activate
-python -m pip install --upgrade pip
-'''
+              $PYTHON -m venv $VENV_DIR
+              . $VENV_DIR/bin/activate
+              python -m pip install --upgrade pip
+              '''
             }
         }
 
