@@ -40,15 +40,15 @@ python -m pip install --upgrade pip
             }
         }
 
-        // stage('Install Dependencies') {
-        //     steps {
-        //         echo "📚 Instalando dependências..."
-        //         sh '''
-        //         . $VENV_DIR/bin/activate
-        //         pip install -r requirements.txt
-        //         '''
-        //     }
-        // }
+        stage('Install Dependencies') {
+            steps {
+                echo "📚 Instalando dependências..."
+                sh '''
+                . $VENV_DIR/bin/activate
+                pip install -r requirements.txt
+                '''
+            }
+        }
 
         stage('Build') {
             steps {
