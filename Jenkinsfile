@@ -65,13 +65,20 @@ pipeline {
         stage('Run Tests') {
             steps {
                 echo "🧪 Executando testes unitários com pytest..."
-                sh '''
-                . $VENV_DIR/bin/activate
-                mkdir -p reports
-                pytest tests/ --maxfail=1 --disable-warnings \
-                    --junitxml=reports/report.xml \
-                    --html=reports/report.html
-                '''
+                withCredentials([
+                    usernamePassword(credentialsId: 'POSTGRES_USER_PASS', usernameVariable: 'POSTGRES_USER', passwordVariable: 'POSTGRES_PASSWORD'),
+                    string(credentialsId: 'POSTGRES_SERVER', variable: 'POSTGRES_SERVER'),
+                    string(credentialsId: 'POSTGRES_DB', variable: 'POSTGRES_DB'),
+                    string(credentialsId: 'SECRET_KEY', variable: 'SECRET_KEY')
+                ]) {
+                    sh '''
+                    . $VENV_DIR/bin/activate
+                    mkdir -p reports
+                    pytest tests/ --maxfail=1 --disable-warnings \
+                        --junitxml=reports/report.xml \
+                        --html=reports/report.html
+                    '''
+                }
             }
         }
 
