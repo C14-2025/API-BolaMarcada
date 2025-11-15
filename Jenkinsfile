@@ -8,18 +8,18 @@ pipeline {
 
     stages {
         stage('Checkout') {
-            steps {
-                echo "📦 Clonando repositório..."
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/C14-2025/API-BolaMarcada.git',
-                        credentialsId: 'PAT_Jenkins'
-                    ]]
-                    extensions: [[$class: 'WipeWorkspace']]
-                ])
-            }
+          steps {
+            echo "📦 Clonando repositório..."
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: '*/main']],
+                userRemoteConfigs: [[
+                    url: 'https://github.com/C14-2025/API-BolaMarcada.git',
+                    credentialsId: 'PAT_Jenkins'
+                ]],
+                extensions: [[$class: 'WipeWorkspace']]
+            ])
+          }
         }
 
         stage('Setup Python Environment') {
