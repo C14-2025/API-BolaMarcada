@@ -92,17 +92,17 @@ pipeline {
         stage('Create GitHub Release') {
             steps {
                 withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
-                    sh '''
+                    sh """
                     # Cria release usando a API do GitHub via curl
-                    curl -X POST -H "Authorization: token $GH_TOKEN" \
+                    curl -X POST -H "Authorization: token \$GH_TOKEN" \
                         -H "Content-Type: application/json" \
-                        -d '{
-                            "tag_name": "v${BUILD_NUMBER}",
-                            "name": "v${BUILD_NUMBER}",
-                            "body": "Build automatizado via Jenkins"
-                        }' \
+                        -d \"{
+                            \\\"tag_name\\\": \\\"v\$BUILD_NUMBER\\\",
+                            \\\"name\\\": \\\"v\$BUILD_NUMBER\\\",
+                            \\\"body\\\": \\\"Build automatizado via Jenkins\\\"
+                        }\" \
                         https://api.github.com/repos/C14-2025/API-BolaMarcada/releases
-                    '''
+                    """
                 }
             }
         }
