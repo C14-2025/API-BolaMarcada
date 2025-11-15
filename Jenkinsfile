@@ -51,16 +51,16 @@ pipeline {
             }
         }
 
-        // stage('Build') {
-        //     steps {
-        //         echo "🏗️ Realizando build do projeto..."
-        //         sh '''
-        //         . $VENV_DIR/bin/activate
-        //         pip install build
-        //         python -m build || echo "⚠️ Nenhum processo de build necessário."
-        //         '''
-        //     }
-        // }
+        stage('Build') {
+            steps {
+                echo "🏗️ Realizando build do projeto..."
+                sh '''
+                . $VENV_DIR/bin/activate
+                pip install build
+                python -m build || echo "⚠️ Nenhum processo de build necessário."
+                '''
+            }
+        }
 
         // stage('Run Tests') {
         //     steps {
