@@ -8,7 +8,7 @@ from pydantic import ConfigDict
 class UserBase(BaseModel):
     name: str
     email: EmailStr
-    cpf: str = Field(..., json_schema_extra={"example": "12345678901"})
+    cpf: Optional[str] = None
     phone: Optional[str] = None
     is_active: bool = True
     is_admin: bool = False
@@ -22,19 +22,19 @@ class UserBase(BaseModel):
 class UserSignUp(BaseModel):
     name: str
     email: EmailStr
-    password: str
+    password: str = Field(..., json_schema_extra={"example": "Abcd1234!"})
     cpf: Optional[str] = None
     phone: Optional[str] = None
     avatar: Optional[str] = None
 
-    # valida senha (se você já tinha isso, mantenha)
     @field_validator("password")
     @classmethod
-    def _password_ok(cls, v: str):
-        validate_password(v)  # sua função existente
+    def _password_ok(cls, v: Optional[str]):
+        if v is None:
+            return v
+        validate_password(v)
         return v
 
-    # valida CPF apenas se for enviado
     @field_validator("cpf")
     @classmethod
     def _cpf_ok(cls, v: Optional[str]):
@@ -43,9 +43,8 @@ class UserSignUp(BaseModel):
         v = v.strip()
         if not v:
             return None
-        validate_cpf(v)       # sua função existente
+        validate_cpf(v)
         return v
-
 
 
 class UserSignIn(BaseModel):
@@ -90,7 +89,6 @@ class UserUpdateMe(BaseModel):
             return None
         validate_cpf(v)
         return v
-
 
 
 class UserPublic(UserBase):

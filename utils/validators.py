@@ -13,7 +13,11 @@ def validate_password(value: str) -> str:
         raise ValueError("Senha deve ter ao menos um caractere especial")
     return value
 
-def validate_cpf(value: str) -> str:
+def validate_cpf(value):
+    if value in (None, ""):
+        return None
+
     if not re.match(r"^\d{11}$", value):
-        raise ValueError("CPF deve ter exatamente 11 dígitos")
+        raise ValueError("CPF inválido")
+
     return value
