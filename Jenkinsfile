@@ -21,7 +21,7 @@ pipeline {
     PGPASS = 'postgres'
     PGDB   = 'bolamarcadadb'
     PGHOST = 'ci-db'
-    PGPORT = '55432'
+    PGPORT = '5432'
 
     // Relatórios/artefatos
     JUNIT_XML    = 'report-junit.xml'
