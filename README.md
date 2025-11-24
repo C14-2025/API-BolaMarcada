@@ -1,42 +1,19 @@
-# ⚽ BOLA MARCADA - Backend
+# BOLA MARCADA – Backend
 
-Este é o **backend** do projeto **BOLA MARCADA**, desenvolvido com **FastAPI**.  
-O objetivo do sistema é fornecer uma API rápida, segura e escalável para gerenciar os recursos da aplicação.
+API desenvolvida com **FastAPI**, focada em simplicidade, velocidade e organização.  
+O sistema gerencia contas de usuários, centros esportivos, campos e horários disponíveis para reservas.
 
----
-
-## 🚀 Tecnologias utilizadas
-- [Python 3.10+](https://www.python.org/)
-- [FastAPI](https://fastapi.tiangolo.com/)
-- [Uvicorn](https://www.uvicorn.org/)
-- [Pydantic](https://docs.pydantic.dev/)
-- [SQLAlchemy](https://www.sqlalchemy.org/)
-
----
-
-## 📂 Estrutura de diretórios
-
-```bash
-backend/
-│── main.py       # Ponto de entrada da aplicação FastAPI
-│── models.py     # Definição das tabelas do banco (SQLAlchemy)
-│── schemas.py    # Validações e contratos de dados (Pydantic)
-│── requirements.txt  # Dependências do projeto
-```
-
----
-
-## ⚙️ Como rodar o projeto
+## Instalação
 
 1. Clone o repositório:
 ```bash
 git clone https://github.com/seu-usuario/bola-marcada.git
 ```
 
-2. Crie e ative um ambiente virtual:
+2. Crie e ative o ambiente virtual:
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
+source .venv/bin/activate   # Mac/Linux
 .venv\Scripts\activate      # Windows
 ```
 
@@ -45,16 +22,109 @@ source .venv/bin/activate   # Linux/Mac
 pip install -r requirements.txt
 ```
 
-4. Execute a aplicação:
+
+## Executando o Projeto
+
+Rode o servidor FastAPI:
 ```bash
-uvicorn main:app --reload
+python main.py
 ```
 
-###### O servidor estará rodando em: http://127.0.0.1:8000
+Servidor disponível em:
+**http://localhost:8000**
 
----
+Documentação automática:
+- Swagger: **http://localhost:8000/docs**
+- Redoc: **http://localhost:8000/redoc**
 
-## 📖 Documentação automática
-### O FastAPI gera documentação interativa para a API:
-- Swagger UI: http://127.0.0.1:8000/docs
-- Redoc: http://127.0.0.1:8000/redoc
+
+## Testes
+
+Execute todos os testes com:
+```bash
+pytest
+```
+
+
+## Funcionalidades do BOLA MARCADA
+
+### CRUD de Conta
+- Criar conta  
+- Login  
+- Atualizar informações  
+- Excluir conta  
+
+### CRUD de Centros Esportivos
+- Cadastrados usando **CNPJ**
+- Localização
+- Preço por hora
+- Um centro esportivo pode ter **vários campos**
+- Edição e exclusão de centros esportivos
+
+### CRUD de Campos
+- Associados a um centro esportivo
+- Fotos do campo
+- Tipos suportados:
+  - Futebol  
+  - Basquete  
+  - Vôlei  
+  - Futsal  
+  - Outros
+
+### Marcação de Horários
+- Usuário pode ver horários disponíveis
+- Criar reserva
+- Cancelar reserva
+- Evita conflitos de agendamento
+
+
+## Estrutura do Projeto
+
+```
+backend/
+│── main.py                           # Entrada da aplicação
+│── models/                           # Modelos do banco
+│      │── models.py
+│      └── models.py
+│
+│── routes/                           # Endpoints organizados
+│      │── availability_routes.py
+│      │── booking_routes.py
+│      │── field_routes.py
+│      │── review_routes.py
+│      │── sports_center_routes.py
+│      └── user_routes.py
+│
+│── schemas/                          # Schemas Pydantic
+│      │── availability_schemas.py
+│      │── booking_schemas.py
+│      │── field_schemas.py
+│      │── review_schemas.py
+│      │── sports_center_schemas.py
+│      └── user_schemas.py
+│
+│── scripts/                          # Script para enviar e-mail
+│      └── shell.sh
+│
+│── services/                         # Comunicação com BD
+│      │── availability_service.py
+│      │── booking_service.py
+│      │── field_service.py
+│      │── review_service.py
+│      │── sports_center_service.py
+│      └── user_service.py
+│
+│── tests/                            # Testes Pytest
+│      │── auth_test.py
+│      │── conftest.py
+│      │── field_test.py
+│      │── test_review.py
+│      │── test_sports_center.py
+│      └── tests_utils.py
+│
+│── utils/                            # Utilidades
+│      │── security.py
+│      └── validators.py
+│
+└── requirements.txt                  # Dependências
+```
