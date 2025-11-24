@@ -71,69 +71,69 @@ pipeline {
       parallel {
 
         stage('Testes') {
-  steps {
-    script {
-      catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-        withCredentials([
-          string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
-          string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
-        ]) {
-          bat """
-            @echo on
-            rem -- rede dedicada
-            docker network create ci_net 2>nul || echo net exists
+          steps {
+            script {
+              catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                withCredentials([
+                  string(credentialsId: 'app-secret-key',       variable: 'SECRET_KEY'),
+                  string(credentialsId: 'access-token-expire', variable: 'ACCESS_TOKEN_EXPIRE_MINUTES')
+                ]) {
+                  bat """
+                    @echo on
+                    rem -- rede dedicada
+                    docker network create ci_net 2>nul || echo net exists
 
-            rem -- sobe Postgres
-            docker rm -f ci-db 2>nul
-            docker run -d --name ci-db --network ci_net ^
-              -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
-              -p %PGPORT%:5432 postgres:17-alpine
+                    rem -- sobe Postgres
+                    docker rm -f ci-db 2>nul
+                    docker run -d --name ci-db --network ci_net ^
+                      -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
+                      -p %PGPORT%:5432 postgres:17-alpine
 
-            rem -- espera Postgres
-            docker run --rm --network ci_net postgres:17-alpine sh -lc "until pg_isready -h %PGHOST% -p 5432 -U %PGUSER% -d %PGDB%; do sleep 1; done"
+                    rem -- espera Postgres
+                    docker run --rm --network ci_net postgres:17-alpine sh -lc "until pg_isready -h %PGHOST% -p 5432 -U %PGUSER% -d %PGDB%; do sleep 1; done"
 
-            rem -- roda pytest dentro da SUA imagem
-            docker run --rm --network ci_net ^
-              -e POSTGRES_SERVER=%PGHOST% -e POSTGRES_HOST=%PGHOST% ^
-              -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
-              -e DATABASE_URL=postgresql+psycopg2://%PGUSER%:%PGPASS%@%PGHOST%:5432/%PGDB% ^
-              -e SECRET_KEY=%SECRET_KEY% ^
-              -e ACCESS_TOKEN_EXPIRE_MINUTES=%ACCESS_TOKEN_EXPIRE_MINUTES% ^
-              -e PYTHONPATH=/workspace ^
-              -v "%cd%":/workspace -w /workspace %IMAGE% ^
-              sh -lc "python -m pip install --disable-pip-version-check -U pip && python -m pip install pytest pytest-cov && pytest -vv tests --junit-xml=/workspace/%JUNIT_XML% --cov=/workspace --cov-report=xml:/workspace/%COVERAGE_XML%"
+                    rem -- roda pytest dentro da SUA imagem
+                    docker run --rm --network ci_net ^
+                      -e POSTGRES_SERVER=%PGHOST% -e POSTGRES_HOST=%PGHOST% ^
+                      -e POSTGRES_USER=%PGUSER% -e POSTGRES_PASSWORD=%PGPASS% -e POSTGRES_DB=%PGDB% ^
+                      -e DATABASE_URL=postgresql+psycopg2://%PGUSER%:%PGPASS%@%PGHOST%:5432/%PGDB% ^
+                      -e SECRET_KEY=%SECRET_KEY% ^
+                      -e ACCESS_TOKEN_EXPIRE_MINUTES=%ACCESS_TOKEN_EXPIRE_MINUTES% ^
+                      -e PYTHONPATH=/workspace ^
+                      -v "%cd%":/workspace -w /workspace %IMAGE% ^
+                      sh -lc "python -m pip install --disable-pip-version-check -U pip && python -m pip install pytest pytest-cov && pytest -vv tests --junit-xml=/workspace/%JUNIT_XML% --cov=/workspace --cov-report=xml:/workspace/%COVERAGE_XML%"
 
-            set RC=%errorlevel%
-            if %RC%==0 (
-              echo SUCCESS>status_tests.txt
-            ) else (
-              echo FAILURE>status_tests.txt
-              exit /b %RC%
-            )
-          """
+                    set RC=%errorlevel%
+                    if %RC%==0 (
+                      echo SUCCESS>status_tests.txt
+                    ) else (
+                      echo FAILURE>status_tests.txt
+                      exit /b %RC%
+                    )
+                  """
+                }
+              }
+            }
+          }
+          post {
+            always {
+              junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
+              archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
+              bat '''
+                @echo off
+                rem -- cleanup tolerante a erros
+                docker rm -f ci-db 1>nul 2>nul || ver > nul
+                docker network rm ci_net 1>nul 2>nul || ver > nul
+              '''
+              script {
+                if (!fileExists('status_tests.txt')) {
+                  writeFile file: 'status_tests.txt', text: 'FAILURE'
+                }
+              }
+            }
+          }
         }
-      }
-    }
-  }
-  post {
-  always {
-    junit allowEmptyResults: true, testResults: "${JUNIT_XML}"
-    archiveArtifacts allowEmptyArchive: true, artifacts: "${JUNIT_XML}, ${COVERAGE_XML}"
-    bat '''
-      @echo off
-      rem -- cleanup tolerante a erros
-      docker rm -f ci-db 1>nul 2>nul || ver > nul
-      docker network rm ci_net 1>nul 2>nul || ver > nul
-    '''
-    script {
-      if (!fileExists('status_tests.txt')) {
-        writeFile file: 'status_tests.txt', text: 'FAILURE'
-      }
-    }
-  }
-}
 
-        }
         stage('Empacotamento') {
           steps {
             script {
@@ -166,8 +166,8 @@ pipeline {
       when {
         allOf {
           expression { params.ENABLE_GH_RELEASE as boolean }
-          // Libera para feat/CI/Docker, feat/CICD/Jenkins, main, master e release/*
-          expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+)/ }
+          // Libera para feat/CI/Docker, feat/CICD/Jenkins, main, master, release/* e test/*
+          expression { return env.BRANCH ==~ /(feat\/CI\/Docker|feat\/CICD\/Jenkins|main|master|release\/.+|test\/.+)/ }
         }
       }
       steps {
@@ -347,4 +347,4 @@ print("Email enviado para", to_email)
       echo "Pipeline finalizado."
     }
   }
-}  
+}
