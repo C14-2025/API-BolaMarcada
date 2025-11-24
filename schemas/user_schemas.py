@@ -19,10 +19,33 @@ class UserBase(BaseModel):
     _validate_cpf = field_validator("cpf", mode="before")(validate_cpf)
 
 
-class UserSignUp(UserBase):
-    password: str = Field(..., json_schema_extra={"example": "Abcd1234!"})
+class UserSignUp(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    cpf: Optional[str] = None
+    phone: Optional[str] = None
+    avatar: Optional[str] = None
 
-    _validate_password = field_validator("password", mode="before")(validate_password)
+    # valida senha (se você já tinha isso, mantenha)
+    @field_validator("password")
+    @classmethod
+    def _password_ok(cls, v: str):
+        validate_password(v)  # sua função existente
+        return v
+
+    # valida CPF apenas se for enviado
+    @field_validator("cpf")
+    @classmethod
+    def _cpf_ok(cls, v: Optional[str]):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        validate_cpf(v)       # sua função existente
+        return v
+
 
 
 class UserSignIn(BaseModel):
@@ -42,10 +65,32 @@ class UserResponse(BaseModel):
 
 
 class UserUpdateMe(BaseModel):
-    name: str
+    name: Optional[str] = None
     email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    cpf: Optional[str] = None
     phone: Optional[str] = None
-    avatar: Optional[str] = None  
+    avatar: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_ok_update(cls, v: Optional[str]):
+        if v is None:
+            return v
+        validate_password(v)
+        return v
+
+    @field_validator("cpf")
+    @classmethod
+    def _cpf_ok_update(cls, v: Optional[str]):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        validate_cpf(v)
+        return v
+
 
 
 class UserPublic(UserBase):

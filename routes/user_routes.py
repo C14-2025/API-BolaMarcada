@@ -19,8 +19,37 @@ from services.user_service import (
     hard_delete_user_me,
 )
 from utils.security import create_access_token, get_current_user
+import uuid
 
 user_router = APIRouter(prefix="/users", tags=["users"])
+
+
+@user_router.get("/me", response_model=UserPublic, status_code=status.HTTP_200_OK)
+def get_me(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Retorna os dados públicos do usuário autenticado.
+    """
+    return current_user
+
+
+@user_router.get("/{user_id}", response_model=UserPublic, status_code=status.HTTP_200_OK)
+def get_user_by_id(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Retorna os dados públicos de um usuário pelo ID.
+    """
+    user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    return user
 
 
 @user_router.post(

@@ -1,9 +1,13 @@
-from fastapi import APIRouter, Depends
-from requests import Session
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from core.database import get_db
 from schemas.booking_schemas import BookingCreate
-from services.booking_service import get_booking_by_id
+from services.booking_service import (
+    get_booking_by_id,
+    create_booking_service,
+    delete_booking_by_id,
+)
 
 booking_router = APIRouter(prefix="/bookings", tags=["bookings"])
 
