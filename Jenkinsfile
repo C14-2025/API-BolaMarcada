@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         VENV_DIR = "venv"
-        PYTHON = "python3"
+        PYTHON = "python"
     }
 
     stages {
